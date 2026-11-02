@@ -1,0 +1,31 @@
+# Environnements virtuels Python 
+venv/
+.venv/
+
+# <python 
+__pycache__/
+*.py[cod]
+
+# Django
+db.sqlite3
+media/
+
+# React / Node.js
+node_modules/
+dist/
+.vite
+
+# variables secrètes
+.env
+.env.*
+
+# Autoriser les modèles de configuration
+!.env.example
+!.env.-example
+
+# IDE
+.vscode/
+
+# Système
+.DS_Store
+Thumbs.db
