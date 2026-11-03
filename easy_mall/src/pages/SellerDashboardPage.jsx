@@ -10,6 +10,8 @@ import { useAuth } from "../features/auth/AuthContext";
 import { fetchMyProducts, deleteProduct, fetchMySales, fetchConfirmedSalesCount, deleteSale } from "../features/seller/api";
 import { formatPrice } from "../lib/format";
 import { cx } from "../styles/theme";
+import { VerificationPanel } from "../components/seller/VerificationPanel";
+import { SellerLocalizationPanel } from "../components/seller/SellerLocalizationPanel";
 
 const STATUS_LABELS = { draft: "Brouillon", published: "Publié", sold: "Vendu", archived: "Archivé" };
 const MODERATION_LABELS = { pending: "En attente de validation", approved: "Visible", rejected: "Refusée" };
@@ -22,7 +24,7 @@ const STATUS_STYLES = {
 
 export default function SellerDashboardPage() {
   const { t } = useTheme();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -34,7 +36,8 @@ export default function SellerDashboardPage() {
   const [busySaleId, setBusySaleId] = useState(null);
 
   useEffect(() => {
-    setActiveSection(searchParams.get("section") === "sales" ? "sales" : "products");
+    const section = searchParams.get("section");
+    setActiveSection(["sales", "verification", "localization"].includes(section) ? section : "products");
   }, [searchParams]);
 
   function loadProducts() {
@@ -124,7 +127,7 @@ export default function SellerDashboardPage() {
           <StatCard icon={TrendingUp} label="Ventes confirmées" value={confirmedSalesCount} t={t} />
         </div>
 
-        <div className={cx("mb-6 flex w-full max-w-lg rounded-xl border p-1", t.border, t.cardBg)} role="tablist" aria-label="Contenu du tableau vendeur">
+        <div className={cx("mb-6 flex w-full max-w-2xl rounded-xl border p-1", t.border, t.cardBg)} role="tablist" aria-label="Contenu du tableau vendeur">
           <button
             type="button"
             role="tab"
@@ -143,9 +146,31 @@ export default function SellerDashboardPage() {
           >
             Mes ventes ({sales.items.length})
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeSection === "verification"}
+            onClick={() => setActiveSection("verification")}
+            className={cx("flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors", activeSection === "verification" ? "bg-indigo-600 text-white" : t.textMuted)}
+          >
+            Vérification
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeSection === "localization"}
+            onClick={() => setActiveSection("localization")}
+            className={cx("flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors", activeSection === "localization" ? "bg-indigo-600 text-white" : t.textMuted)}
+          >
+            Localisation & livraison
+          </button>
         </div>
 
-        {activeSection === "products" ? (
+        {activeSection === "localization" ? (
+          <SellerLocalizationPanel t={t} />
+        ) : activeSection === "verification" ? (
+          <VerificationPanel t={t} isProfessional={user?.seller_type === "professional"} />
+        ) : activeSection === "products" ? (
         <div className="mb-12">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <SectionHeading title="Mes annonces" t={t} />

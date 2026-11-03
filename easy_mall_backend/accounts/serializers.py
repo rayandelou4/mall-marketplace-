@@ -3,19 +3,25 @@ Serializers de l'app `accounts`.
 """
 
 import random
+import secrets
 import string
 from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
+from django.db.models import F, Q
 from django.utils import timezone
 from kombu.exceptions import OperationalError
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import EmailVerificationToken, PasswordResetToken, PhoneOTP, User
-from .tasks import send_password_reset_email_task, send_phone_otp_task, send_verification_email_task
+from .tasks import (
+    send_password_reset_email_task,
+    send_phone_otp_task,
+    send_verification_email_task,
+)
 
 
 def _generate_otp_code():
@@ -27,25 +33,111 @@ class UserSerializer(serializers.ModelSerializer):
 
     full_name = serializers.ReadOnlyField()
     is_fully_verified = serializers.ReadOnlyField()
-    seller_type_display = serializers.CharField(source="get_seller_type_display", read_only=True)
+    seller_type_display = serializers.CharField(
+        source="get_seller_type_display", read_only=True
+    )
+    city = serializers.SerializerMethodField()
+    country = serializers.SerializerMethodField()
     public_location_display = serializers.SerializerMethodField()
+    verification_badges = serializers.SerializerMethodField()
+
+    def get_city(self, obj):
+        location = getattr(obj, "public_location", None)
+        preference = getattr(obj, "location_preference", None)
+        if (
+            location is None
+            or preference is None
+            or not preference.show_locality
+            or location.precision
+            not in {location.Precision.CITY, location.Precision.LOCALITY}
+            or location.locality is None
+            or (
+                location.locality.level == "neighborhood"
+                and location.precision != location.Precision.LOCALITY
+            )
+        ):
+            return ""
+        return location.locality.name
+
+    def get_country(self, obj):
+        location = getattr(obj, "public_location", None)
+        preference = getattr(obj, "location_preference", None)
+        if location is None or (preference is not None and not preference.show_country):
+            return ""
+        return location.country.name
 
     def get_public_location_display(self, obj):
         location = getattr(obj, "public_location", None)
-        if location is None:
-            parts = [p for p in (obj.city, obj.country) if p]
-            return ", ".join(parts)
-        return location.display_name
+        return location.display_name if location is not None else ""
+
+    def get_verification_badges(self, obj):
+        from seller_verification.models import VerificationLevel
+        from seller_verification.services import CertificationCalculator
+
+        labels = {
+            VerificationLevel.LEVEL_0_PROFILE_CREATED: (
+                "Profil créé",
+                "Un compte actif existe. Cela ne confirme ni l'identité ni la fiabilité.",
+            ),
+            VerificationLevel.LEVEL_1_EMAIL_VERIFIED: (
+                "E-mail vérifié",
+                "L'adresse e-mail a été confirmée; ce n'est pas une preuve d'identité.",
+            ),
+            VerificationLevel.LEVEL_2_IDENTITY_VERIFIED: (
+                "Identité examinée",
+                "Examen interne d'un justificatif; l'authenticité du document n'est pas garantie.",
+            ),
+            VerificationLevel.LEVEL_3_BUSINESS_VERIFIED: (
+                "Commerçant professionnel vérifié",
+                "Examen interne d'éléments d'activité; cela ne prouve pas l'identité personnelle du propriétaire.",
+            ),
+            VerificationLevel.LEVEL_4_RELIABLE_HISTORY: (
+                "Historique commercial fiable",
+                "Indicateur calculé depuis les ventes terminées, avis transactionnels et annulations.",
+            ),
+        }
+        levels = {VerificationLevel.LEVEL_0_PROFILE_CREATED}
+        if obj.is_email_verified:
+            levels.add(VerificationLevel.LEVEL_1_EMAIL_VERIFIED)
+        levels.update(
+            obj.certifications.filter(revoked_at__isnull=True)
+            .exclude(level=VerificationLevel.LEVEL_4_RELIABLE_HISTORY)
+            .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+            .values_list("level", flat=True)
+        )
+        if CertificationCalculator._qualifies_for_reliable_history(obj):
+            levels.add(VerificationLevel.LEVEL_4_RELIABLE_HISTORY)
+        return [
+            {"level": level, "label": labels[level][0], "meaning": labels[level][1]}
+            for level in labels
+            if level in levels
+        ]
 
     class Meta:
         model = User
         fields = [
-            "id", "username", "full_name", "first_name", "last_name",
-            "avatar_url", "bio", "city", "country",
+            "id",
+            "username",
+            "full_name",
+            "first_name",
+            "last_name",
+            "avatar_url",
+            "bio",
+            "city",
+            "country",
             "public_location_display",
-            "seller_type", "seller_type_display", "shop_name", "shop_description", "shop_logo_url", "shop_cover_url",
-            "average_rating", "total_sales", "total_purchases",
-            "is_fully_verified", "is_email_verified", "theme_preference", "date_joined",
+            "verification_badges",
+            "seller_type",
+            "seller_type_display",
+            "shop_name",
+            "shop_description",
+            "shop_logo_url",
+            "shop_cover_url",
+            "average_rating",
+            "total_sales",
+            "total_purchases",
+            "theme_preference",
+            "date_joined",
         ]
         read_only_fields = fields
 
@@ -58,7 +150,11 @@ class MeSerializer(UserSerializer):
     """
 
     class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields + ["is_staff"]
+        fields = UserSerializer.Meta.fields + [
+            "is_staff",
+            "is_email_verified",
+            "is_fully_verified",
+        ]
         read_only_fields = fields
 
 
@@ -68,8 +164,17 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "first_name", "last_name", "avatar_url", "bio", "city", "country",
-            "seller_type", "shop_name", "shop_description", "shop_logo_url", "shop_cover_url",
+            "first_name",
+            "last_name",
+            "avatar_url",
+            "bio",
+            "city",
+            "country",
+            "seller_type",
+            "shop_name",
+            "shop_description",
+            "shop_logo_url",
+            "shop_cover_url",
             "theme_preference",
         ]
 
@@ -83,14 +188,28 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
-    seller_type = serializers.ChoiceField(choices=User.SellerType.choices, required=False, default=User.SellerType.INDIVIDUAL)
+    seller_type = serializers.ChoiceField(
+        choices=User.SellerType.choices,
+        required=False,
+        default=User.SellerType.INDIVIDUAL,
+    )
 
     class Meta:
         model = User
         fields = [
-            "email", "phone_number", "username", "first_name", "last_name",
-            "avatar_url", "seller_type", "shop_name", "shop_description", "shop_logo_url", "shop_cover_url",
-            "password", "password_confirm",
+            "email",
+            "phone_number",
+            "username",
+            "first_name",
+            "last_name",
+            "avatar_url",
+            "seller_type",
+            "shop_name",
+            "shop_description",
+            "shop_logo_url",
+            "shop_cover_url",
+            "password",
+            "password_confirm",
         ]
 
     def validate(self, attrs):
@@ -98,8 +217,13 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"password_confirm": "Les deux mots de passe ne correspondent pas."}
             )
-        if attrs.get("seller_type") not in {User.SellerType.INDIVIDUAL, User.SellerType.PROFESSIONAL}:
-            raise serializers.ValidationError({"seller_type": "Type de vendeur invalide."})
+        if attrs.get("seller_type") not in {
+            User.SellerType.INDIVIDUAL,
+            User.SellerType.PROFESSIONAL,
+        }:
+            raise serializers.ValidationError(
+                {"seller_type": "Type de vendeur invalide."}
+            )
         return attrs
 
     def create(self, validated_data):
@@ -122,7 +246,9 @@ class RegisterSerializer(serializers.ModelSerializer):
                 send_verification_email_task.run(str(user.id), str(token.code))
             except Exception as exc:
                 raise serializers.ValidationError(
-                    {"email": "L'envoi de l'e-mail de confirmation a échoué. L'inscription a été annulée."}
+                    {
+                        "email": "L'envoi de l'e-mail de confirmation a échoué. L'inscription a été annulée."
+                    }
                 ) from exc
 
             return user
@@ -145,7 +271,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         user = self.user
         if not user.is_active or not user.is_email_verified:
             raise serializers.ValidationError(
-                {"detail": "Veuillez vérifier votre adresse e-mail avant de pouvoir vous connecter."}
+                {
+                    "detail": "Veuillez vérifier votre adresse e-mail avant de pouvoir vous connecter."
+                }
             )
 
         data["user"] = MeSerializer(user).data
@@ -159,7 +287,9 @@ class EmailVerificationConfirmSerializer(serializers.Serializer):
     def validate(self, attrs):
         code = attrs["code"]
         if not code.isdigit():
-            raise serializers.ValidationError({"code": "Le code de vérification doit contenir 6 chiffres."})
+            raise serializers.ValidationError(
+                {"code": "Le code de vérification doit contenir 6 chiffres."}
+            )
 
         request = self.context.get("request")
         user = None
@@ -170,30 +300,59 @@ class EmailVerificationConfirmSerializer(serializers.Serializer):
             try:
                 user = User.objects.get(email__iexact=attrs["email"])
             except User.DoesNotExist:
-                raise serializers.ValidationError({"email": "Aucun compte trouvé pour cet e-mail."})
+                raise serializers.ValidationError(
+                    {"email": "Aucun compte trouvé pour cet e-mail."}
+                )
         else:
-            raise serializers.ValidationError({"email": "L'e-mail est requis pour vérifier le code."})
+            raise serializers.ValidationError(
+                {"email": "L'e-mail est requis pour vérifier le code."}
+            )
 
         verification = (
-            EmailVerificationToken.objects.filter(user=user, code=code)
+            EmailVerificationToken.objects.filter(
+                user=user,
+                is_used=False,
+            )
             .order_by("-created_at")
             .first()
         )
         if not verification or not verification.is_valid():
             raise serializers.ValidationError(
-                {"code": "Code invalide ou expiré. Demandez un nouveau code pour recevoir un code frais."}
+                {
+                    "code": "Code invalide ou expiré. Demandez un nouveau code pour recevoir un code frais."
+                }
+            )
+        if not secrets.compare_digest(verification.code, code):
+            EmailVerificationToken.objects.filter(
+                pk=verification.pk,
+                attempts__lt=EmailVerificationToken.MAX_ATTEMPTS,
+            ).update(attempts=F("attempts") + 1)
+            raise serializers.ValidationError(
+                {
+                    "code": "Code invalide ou expiré. Demandez un nouveau code pour recevoir un code frais."
+                }
             )
 
         self.verification = verification
         return attrs
 
     def save(self):
-        user = self.verification.user
-        user.is_email_verified = True
-        user.is_active = True
-        user.save(update_fields=["is_email_verified", "is_active"])
-        self.verification.is_used = True
-        self.verification.save(update_fields=["is_used"])
+        with transaction.atomic():
+            token_updated = EmailVerificationToken.objects.filter(
+                pk=self.verification.pk,
+                code=self.verification.code,
+                is_used=False,
+                attempts__lt=EmailVerificationToken.MAX_ATTEMPTS,
+                expires_at__gt=timezone.now(),
+            ).update(is_used=True)
+            if not token_updated:
+                raise serializers.ValidationError(
+                    {"code": "Code déjà utilisé ou expiré."}
+                )
+            user = self.verification.user
+            user.is_email_verified = True
+            user.is_active = True
+            user.save(update_fields=["is_email_verified", "is_active"])
         return user
 
 
@@ -215,9 +374,15 @@ class PhoneOTPVerifySerializer(serializers.Serializer):
 
     def validate_code(self, value):
         user = self.context["request"].user
-        otp = PhoneOTP.objects.filter(user=user, code=value).order_by("-created_at").first()
+        otp = (
+            PhoneOTP.objects.filter(user=user, code=value)
+            .order_by("-created_at")
+            .first()
+        )
         if not otp or not otp.is_valid():
-            last_otp = PhoneOTP.objects.filter(user=user).order_by("-created_at").first()
+            last_otp = (
+                PhoneOTP.objects.filter(user=user).order_by("-created_at").first()
+            )
             if last_otp:
                 last_otp.attempts += 1
                 last_otp.save(update_fields=["attempts"])
@@ -264,7 +429,9 @@ class PasswordResetCodeVerifySerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if not attrs["code"].isdigit():
-            raise serializers.ValidationError({"code": "Le code doit contenir 6 chiffres."})
+            raise serializers.ValidationError(
+                {"code": "Le code doit contenir 6 chiffres."}
+            )
 
         try:
             user = User.objects.get(email__iexact=attrs["email"])
@@ -287,11 +454,15 @@ class PasswordResetCodeVerifySerializer(serializers.Serializer):
 class PasswordResetConfirmSerializer(serializers.Serializer):
     email = serializers.EmailField()
     code = serializers.CharField(max_length=6)
-    new_password = serializers.CharField(write_only=True, validators=[validate_password])
+    new_password = serializers.CharField(
+        write_only=True, validators=[validate_password]
+    )
 
     def validate(self, attrs):
         if not attrs["code"].isdigit():
-            raise serializers.ValidationError({"code": "Le code doit contenir 6 chiffres."})
+            raise serializers.ValidationError(
+                {"code": "Le code doit contenir 6 chiffres."}
+            )
 
         try:
             user = User.objects.get(email__iexact=attrs["email"])
@@ -332,17 +503,33 @@ class ResendEmailVerificationSerializer(serializers.Serializer):
         if user and user.is_authenticated:
             if user.is_email_verified:
                 raise serializers.ValidationError("Cet e-mail est déjà vérifié.")
-            last_token = EmailVerificationToken.objects.filter(user=user).order_by("-created_at").first()
-            if last_token and timezone.now() < last_token.created_at + timedelta(seconds=self.RESEND_COOLDOWN_SECONDS):
+            last_token = (
+                EmailVerificationToken.objects.filter(user=user)
+                .order_by("-created_at")
+                .first()
+            )
+            if last_token and timezone.now() < last_token.created_at + timedelta(
+                seconds=self.RESEND_COOLDOWN_SECONDS
+            ):
                 remaining = int(
-                    (last_token.created_at + timedelta(seconds=self.RESEND_COOLDOWN_SECONDS) - timezone.now()).total_seconds()
+                    (
+                        last_token.created_at
+                        + timedelta(seconds=self.RESEND_COOLDOWN_SECONDS)
+                        - timezone.now()
+                    ).total_seconds()
                 )
-                raise serializers.ValidationError({"detail": f"Veuillez attendre {remaining} secondes avant de renvoyer un nouveau code."})
+                raise serializers.ValidationError(
+                    {
+                        "detail": f"Veuillez attendre {remaining} secondes avant de renvoyer un nouveau code."
+                    }
+                )
             attrs["user"] = user
             return attrs
 
         if not attrs.get("email"):
-            raise serializers.ValidationError({"email": "L'e-mail est requis pour renvoyer le code."})
+            raise serializers.ValidationError(
+                {"email": "L'e-mail est requis pour renvoyer le code."}
+            )
 
         try:
             user = User.objects.get(email__iexact=attrs["email"])
@@ -352,12 +539,26 @@ class ResendEmailVerificationSerializer(serializers.Serializer):
         if user.is_email_verified:
             raise serializers.ValidationError("Cet e-mail est déjà vérifié.")
 
-        last_token = EmailVerificationToken.objects.filter(user=user).order_by("-created_at").first()
-        if last_token and timezone.now() < last_token.created_at + timedelta(seconds=self.RESEND_COOLDOWN_SECONDS):
+        last_token = (
+            EmailVerificationToken.objects.filter(user=user)
+            .order_by("-created_at")
+            .first()
+        )
+        if last_token and timezone.now() < last_token.created_at + timedelta(
+            seconds=self.RESEND_COOLDOWN_SECONDS
+        ):
             remaining = int(
-                (last_token.created_at + timedelta(seconds=self.RESEND_COOLDOWN_SECONDS) - timezone.now()).total_seconds()
+                (
+                    last_token.created_at
+                    + timedelta(seconds=self.RESEND_COOLDOWN_SECONDS)
+                    - timezone.now()
+                ).total_seconds()
             )
-            raise serializers.ValidationError({"detail": f"Veuillez attendre {remaining} secondes avant de renvoyer un nouveau code."})
+            raise serializers.ValidationError(
+                {
+                    "detail": f"Veuillez attendre {remaining} secondes avant de renvoyer un nouveau code."
+                }
+            )
 
         attrs["user"] = user
         return attrs
@@ -367,6 +568,9 @@ class ResendEmailVerificationSerializer(serializers.Serializer):
         if not user:
             return None
 
+        EmailVerificationToken.objects.filter(user=user, is_used=False).update(
+            is_used=True
+        )
         token = EmailVerificationToken.objects.create(
             user=user, expires_at=timezone.now() + timedelta(hours=24)
         )
@@ -383,7 +587,9 @@ class ResendEmailVerificationSerializer(serializers.Serializer):
 
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(write_only=True)
-    new_password = serializers.CharField(write_only=True, validators=[validate_password])
+    new_password = serializers.CharField(
+        write_only=True, validators=[validate_password]
+    )
 
     def validate_old_password(self, value):
         user = self.context["request"].user

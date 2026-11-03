@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { MapPin, Star, Package, ShoppingBag, Settings, Heart } from "lucide-react";
 import { Link } from "react-router-dom";
 import { SiteHeader } from "../components/layout/SiteHeader";
@@ -17,6 +17,7 @@ import { ProfilePhotoViewer } from "../components/ui/ProfilePhotoViewer";
 
 export default function ProfilePage() {
   const { username } = useParams();
+  const navigate = useNavigate();
   const { t } = useTheme();
   const { user, isAuthenticated } = useAuth();
   const [state, setState] = useState({ loading: true, error: null, profile: null, products: [], reviews: [], sellerFavorite: null, favoriteSaving: false });
@@ -115,6 +116,19 @@ export default function ProfilePage() {
                 <p className={cx("mt-1 text-xs font-medium uppercase tracking-wide", t.textMuted)}>
                   {profile.seller_type_display || (profile.seller_type === "professional" ? "Commerçant professionnel" : "Particulier")}
                 </p>
+                {profile.verification_badges?.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {profile.verification_badges.map((badge) => (
+                      <span
+                        key={badge.level}
+                        title={badge.meaning}
+                        className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800"
+                      >
+                        {badge.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {profile.shop_name && (
                   <p className={cx("mt-1 text-sm font-semibold text-indigo-600", t.textMuted)}>{profile.shop_name}</p>
                 )}

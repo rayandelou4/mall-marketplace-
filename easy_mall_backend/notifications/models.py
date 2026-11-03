@@ -28,6 +28,7 @@ class Notification(models.Model):
         DISPUTE_OPENED = "dispute_opened", _("Litige ouvert")
         DISPUTE_RESOLVED = "dispute_resolved", _("Litige résolu")
         LISTING_SUSPENDED = "listing_suspended", _("Annonce suspendue")
+        VERIFICATION_UPDATE = "verification_update", _("Mise à jour de vérification")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications")

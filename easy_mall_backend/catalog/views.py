@@ -17,6 +17,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from accounts.models import User
+from localization.models import AdministrativeArea, Country, DeliveryOption
 from .models import Category, Favorite, Product, SavedSearch, SellerFavorite
 from .serializers import (
     CategorySerializer,
@@ -32,8 +33,26 @@ from .serializers import (
 # Mots trop courants pour compter dans le rapprochement "titre similaire" du
 # comparateur de prix (voir ProductViewSet.comparisons ci-dessous).
 _STOPWORDS = {
-    "le", "la", "les", "de", "des", "du", "un", "une", "et", "en", "pour",
-    "avec", "sur", "dans", "au", "aux", "ce", "cette", "ces", "à",
+    "le",
+    "la",
+    "les",
+    "de",
+    "des",
+    "du",
+    "un",
+    "une",
+    "et",
+    "en",
+    "pour",
+    "avec",
+    "sur",
+    "dans",
+    "au",
+    "aux",
+    "ce",
+    "cette",
+    "ces",
+    "à",
 }
 
 
@@ -62,24 +81,54 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
 class ProductFilter(django_filters.FilterSet):
     """GET products: category, search, city, condition, item_type, price_min/max, currency, seller_type, available and ordering."""
 
-    price_min = django_filters.NumberFilter(field_name="price", lookup_expr="gte", min_value=0)
-    price_max = django_filters.NumberFilter(field_name="price", lookup_expr="lte", min_value=0)
+    price_min = django_filters.NumberFilter(
+        field_name="price", lookup_expr="gte", min_value=0
+    )
+    price_max = django_filters.NumberFilter(
+        field_name="price", lookup_expr="lte", min_value=0
+    )
     added_after = django_filters.DateFilter(field_name="created_at", lookup_expr="gte")
     city = django_filters.CharFilter(method="filter_city")
+    country = django_filters.CharFilter(method="filter_public_country")
+    administrative_area = django_filters.UUIDFilter(method="filter_public_area")
+    locality = django_filters.UUIDFilter(method="filter_public_locality")
+    delivery_mode = django_filters.ChoiceFilter(
+        choices=DeliveryOption.Mode.choices,
+        method="filter_delivery_mode",
+    )
+    pickup_available = django_filters.BooleanFilter(method="filter_pickup_available")
+    delivery_area = django_filters.UUIDFilter(method="filter_delivery_area")
     seller = django_filters.CharFilter(field_name="seller__username")
     seller_type = django_filters.ChoiceFilter(
         field_name="seller__seller_type", choices=User.SellerType.choices
     )
     condition = django_filters.ChoiceFilter(choices=Product.Condition.choices)
     item_type = django_filters.ChoiceFilter(choices=Product.ItemType.choices)
-    currency = django_filters.CharFilter(field_name="currency", lookup_expr="iexact", max_length=3)
+    currency = django_filters.CharFilter(
+        field_name="currency", lookup_expr="iexact", max_length=3
+    )
     available = django_filters.BooleanFilter(method="filter_available")
 
     class Meta:
         model = Product
         fields = [
-            "category", "city", "condition", "item_type", "price_min", "price_max",
-            "added_after", "seller", "seller_type", "currency", "available",
+            "category",
+            "city",
+            "condition",
+            "item_type",
+            "price_min",
+            "price_max",
+            "added_after",
+            "seller",
+            "seller_type",
+            "currency",
+            "available",
+            "country",
+            "administrative_area",
+            "locality",
+            "delivery_mode",
+            "pickup_available",
+            "delivery_area",
         ]
 
     def filter_available(self, queryset, name, value):
@@ -93,16 +142,126 @@ class ProductFilter(django_filters.FilterSet):
         return queryset.filter(available_products if value else ~available_products)
 
     def filter_city(self, queryset, name, value):
-        return queryset.filter(Q(city__icontains=value) | Q(seller__city__icontains=value))
+        visible_admin = Q(seller__location_preference__show_admin_area=True) | Q(
+            seller__location_preference__isnull=True
+        )
+        visible_locality = Q(seller__location_preference__show_locality=True)
+        return queryset.filter(
+            Q(
+                seller__public_location__administrative_area__name__icontains=value,
+                seller__public_location__is_active=True,
+                seller__public_location__precision__in=[
+                    "province",
+                    "city",
+                    "locality",
+                    "custom",
+                ],
+            )
+            & visible_admin
+            | Q(
+                seller__public_location__locality__name__icontains=value,
+                seller__public_location__is_active=True,
+                seller__public_location__precision__in=["city", "locality"],
+            )
+            & visible_locality
+        ).distinct()
+
+    def filter_public_country(self, queryset, name, value):
+        country = Country.objects.filter(
+            Q(pk=value) | Q(code__iexact=value) | Q(name__iexact=value),
+            is_active=True,
+        ).first()
+        if country is None:
+            return queryset.none()
+        visible = Q(seller__location_preference__show_country=True) | Q(
+            seller__location_preference__isnull=True
+        )
+        return (
+            queryset.filter(
+                seller__public_location__country=country,
+                seller__public_location__is_active=True,
+            )
+            .filter(visible)
+            .distinct()
+        )
+
+    def filter_public_area(self, queryset, name, value):
+        visible = Q(seller__location_preference__show_admin_area=True) | Q(
+            seller__location_preference__isnull=True
+        )
+        return (
+            queryset.filter(
+                Q(seller__public_location__administrative_area_id=value)
+                | Q(seller__public_location__locality_id=value),
+                seller__public_location__is_active=True,
+                seller__public_location__precision__in=[
+                    "province",
+                    "city",
+                    "locality",
+                    "custom",
+                ],
+            )
+            .filter(visible)
+            .distinct()
+        )
+
+    def filter_public_locality(self, queryset, name, value):
+        return queryset.filter(
+            seller__public_location__locality_id=value,
+            seller__public_location__is_active=True,
+            seller__public_location__precision__in=["city", "locality"],
+            seller__location_preference__show_locality=True,
+        ).distinct()
+
+    def filter_delivery_mode(self, queryset, name, value):
+        return queryset.filter(
+            seller__delivery_options__mode=value,
+            seller__delivery_options__is_active=True,
+        ).distinct()
+
+    def filter_pickup_available(self, queryset, name, value):
+        pickup_sellers = DeliveryOption.objects.filter(
+            mode=DeliveryOption.Mode.PICKUP,
+            is_active=True,
+        ).values("seller_id")
+        return queryset.filter(
+            seller_id__in=(
+                pickup_sellers
+                if value
+                else User.objects.exclude(pk__in=pickup_sellers).values("pk")
+            )
+        )
+
+    def filter_delivery_area(self, queryset, name, value):
+        return (
+            queryset.filter(
+                seller__delivery_options__is_active=True,
+            )
+            .filter(
+                Q(seller__delivery_options__coverage_areas=value)
+                | Q(seller__delivery_options__administrative_area_id=value)
+                | Q(seller__delivery_options__locality_id=value)
+                | Q(seller__delivery_options__mode__in=["national", "international"])
+            )
+            .distinct()
+        )
 
     def filter_queryset(self, queryset):
         data = self.form.cleaned_data
         price_min = data.get("price_min")
         price_max = data.get("price_max")
         if price_min is not None and price_max is not None and price_min > price_max:
-            raise ValidationError({"price_max": "Le prix maximum doit être supérieur ou égal au prix minimum."})
-        if (price_min is not None or price_max is not None) and not data.get("currency"):
-            raise ValidationError({"currency": "La devise est obligatoire pour filtrer par prix."})
+            raise ValidationError(
+                {
+                    "price_max": "Le prix maximum doit être supérieur ou égal au prix minimum."
+                }
+            )
+        if (price_min is not None or price_max is not None) and not data.get(
+            "currency"
+        ):
+            raise ValidationError(
+                {"currency": "La devise est obligatoire pour filtrer par prix."}
+            )
         return super().filter_queryset(queryset)
 
 
@@ -146,7 +305,9 @@ class ProductViewSet(viewsets.ModelViewSet):
     ordering = ["-created_at"]
 
     def get_queryset(self):
-        queryset = Product.objects.select_related("seller", "category").prefetch_related("images")
+        queryset = Product.objects.select_related(
+            "seller", "category"
+        ).prefetch_related("images")
         if self.action in ("list", "retrieve"):
             user = self.request.user
             public_products = Q(
@@ -174,29 +335,50 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
-        if instance.is_suspended and not (request.user.is_authenticated and (request.user.is_staff or request.user == instance.seller)):
-            raise ValidationError({"detail": "Cette annonce est suspendue et n'est plus accessible au public."})
+        if instance.is_suspended and not (
+            request.user.is_authenticated
+            and (request.user.is_staff or request.user == instance.seller)
+        ):
+            raise ValidationError(
+                {
+                    "detail": "Cette annonce est suspendue et n'est plus accessible au public."
+                }
+            )
         Product.objects.filter(pk=instance.pk).update(views_count=F("views_count") + 1)
         instance.refresh_from_db(fields=["views_count"])
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
-    @action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+    @action(
+        detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated]
+    )
     def toggle_favorite(self, request, pk=None):
         """Raccourci pratique pour le frontend : POST /products/{id}/toggle_favorite/"""
         product = self.get_object()
-        favorite, created = Favorite.objects.get_or_create(user=request.user, product=product)
+        favorite, created = Favorite.objects.get_or_create(
+            user=request.user, product=product
+        )
         if not created:
             favorite.delete()
-            Product.objects.filter(pk=product.pk).update(favorites_count=F("favorites_count") - 1)
+            Product.objects.filter(pk=product.pk).update(
+                favorites_count=F("favorites_count") - 1
+            )
             return Response({"favorited": False})
-        Product.objects.filter(pk=product.pk).update(favorites_count=F("favorites_count") + 1)
+        Product.objects.filter(pk=product.pk).update(
+            favorites_count=F("favorites_count") + 1
+        )
         return Response({"favorited": True})
 
-    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+    @action(
+        detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated]
+    )
     def mine(self, request):
         """Annonces du vendeur connecté, tous statuts confondus — tableau de bord vendeur."""
-        queryset = Product.objects.filter(seller=request.user).select_related("category").prefetch_related("images")
+        queryset = (
+            Product.objects.filter(seller=request.user)
+            .select_related("category")
+            .prefetch_related("images")
+        )
         page = self.paginate_queryset(queryset)
         serializer = ProductListSerializer(page or queryset, many=True)
         if page is not None:
@@ -261,7 +443,9 @@ class SellerFavoriteViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "delete"]
 
     def get_queryset(self):
-        return SellerFavorite.objects.filter(user=self.request.user).select_related("seller")
+        return SellerFavorite.objects.filter(user=self.request.user).select_related(
+            "seller"
+        )
 
 
 class SavedSearchViewSet(viewsets.ModelViewSet):

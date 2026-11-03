@@ -1,0 +1,15 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>{{ title }}</h1>
+<p>Vendeur : {{ verification_request.user.username }} · {{ verification_request.get_target_level_display }}</p>
+<p>Cette revue est interne. L'examen visuel d'un document ne garantit pas son authenticité.</p>
+<form method="post" onsubmit="return confirm('Confirmer cette décision ?');">
+  {% csrf_token %}
+  <p><label for="notes">Notes internes</label><br><textarea id="notes" name="notes" rows="5" cols="70"></textarea></p>
+  <p><label for="seller_message">Message pour le vendeur (obligatoire si vous demandez des compléments)</label><br><textarea id="seller_message" name="seller_message" rows="3" cols="70"></textarea></p>
+  <p><label for="rejection_reason">Motif de refus communiqué au vendeur</label><br><textarea id="rejection_reason" name="rejection_reason" rows="3" cols="70"></textarea></p>
+  <button type="submit" name="decision" value="approve">Approuver</button>
+  <button type="submit" name="decision" value="request_more_info">Demander des informations</button>
+  <button type="submit" name="decision" value="reject">Refuser</button>
+</form>
+{% endblock %}

@@ -2,13 +2,24 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from accounts.serializers import UserSerializer
 from catalog.models import Category, Product
-from .models import AdministrativeArea, Country, DeliveryOption, PrivateAddress, SellerPublicLocation
+from catalog.serializers import ProductDetailSerializer
+from .models import (
+    AdministrativeArea,
+    Country,
+    DeliveryOption,
+    PrivateAddress,
+    SellerLocationPreference,
+    SellerPublicLocation,
+)
 
 
 class LocalizationBackendTests(TestCase):
     def setUp(self):
-        self.country = Country.objects.create(code="CD", name="République démocratique du Congo")
+        self.country = Country.objects.create(
+            code="CD", name="République démocratique du Congo"
+        )
         self.province = AdministrativeArea.objects.create(
             country=self.country,
             name="Kinshasa",
@@ -75,17 +86,158 @@ class LocalizationBackendTests(TestCase):
         )
 
     def test_seller_can_store_valid_location_and_public_profile_is_private_safe(self):
-        response = APIClient().get(f"/api/v1/localization/seller-location/{self.seller.username}/")
+        response = APIClient().get(
+            f"/api/v1/localization/seller-location/{self.seller.username}/"
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["country"]["name"], "République démocratique du Congo")
+        self.assertEqual(
+            response.data["country"]["name"], "République démocratique du Congo"
+        )
         self.assertNotIn("street_address", response.data)
         self.assertNotIn("private", response.data.get("country", {}))
 
     def test_private_address_is_not_visible_to_other_user(self):
         client = APIClient()
         client.force_authenticate(user=self.buyer)
-        response = client.get(f"/api/v1/localization/addresses/{self.private_address.pk}/")
-        self.assertEqual(response.status_code, 403)
+        response = client.get(
+            f"/api/v1/localization/addresses/{self.private_address.pk}/"
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_public_location_obeys_seller_privacy_preferences(self):
+        location = self.seller.public_location
+        location.public_note = "Près de la résidence"
+        location.save(update_fields=["public_note"])
+        SellerLocationPreference.objects.create(
+            seller=self.seller,
+            show_country=False,
+            show_admin_area=False,
+            show_locality=False,
+            show_public_note=False,
+        )
+
+        response = APIClient().get(
+            f"/api/v1/localization/seller-location/{self.seller.username}/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["country"])
+        self.assertIsNone(response.data["administrative_area"])
+        self.assertIsNone(response.data["locality"])
+        self.assertEqual(response.data["public_note"], "")
+        self.assertEqual(response.data["display_name"], "")
+        self.assertNotIn("Près de la résidence", str(response.data))
+
+    def test_seller_can_create_and_update_location_from_me_route(self):
+        client = APIClient()
+        client.force_authenticate(user=self.seller)
+        response = client.put(
+            "/api/v1/localization/seller-location/me/",
+            {
+                "country_id": str(self.country.pk),
+                "administrative_area_id": str(self.province.pk),
+                "locality_id": str(self.city.pk),
+                "precision": "city",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["locality"]["id"], str(self.city.pk))
+        self.assertEqual(
+            client.patch(
+                "/api/v1/localization/seller-location/me/",
+                {"precision": "province"},
+                format="json",
+            ).status_code,
+            200,
+        )
+
+    def test_buyer_can_save_multiple_private_addresses(self):
+        client = APIClient()
+        client.force_authenticate(user=self.buyer)
+        first = client.post(
+            "/api/v1/localization/addresses/",
+            {
+                "country_id": str(self.country.pk),
+                "street_address": "Avenue 1",
+                "is_default": True,
+            },
+            format="json",
+        )
+        second = client.post(
+            "/api/v1/localization/addresses/",
+            {
+                "country_id": str(self.country.pk),
+                "street_address": "Avenue 2",
+                "is_default": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(second.status_code, 201, second.data)
+        self.assertEqual(PrivateAddress.objects.filter(user=self.buyer).count(), 2)
+        self.assertEqual(
+            PrivateAddress.objects.filter(user=self.buyer, is_default=True).count(), 1
+        )
+
+    def test_delivery_options_are_created_and_toggled_by_owner(self):
+        client = APIClient()
+        client.force_authenticate(user=self.seller)
+        response = client.post(
+            "/api/v1/localization/delivery-options/",
+            {
+                "mode": "in_city",
+                "country_id": str(self.country.pk),
+                "administrative_area_id": str(self.province.pk),
+                "locality_id": str(self.city.pk),
+                "fees": "2.50",
+                "estimated_delivery_days": 2,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        option_id = response.data["id"]
+        toggled = client.post(
+            f"/api/v1/localization/delivery-options/{option_id}/toggle_active/"
+        )
+        self.assertEqual(toggled.status_code, 200, toggled.data)
+        self.assertFalse(toggled.data["is_active"])
+
+    def test_public_profile_and_product_do_not_leak_legacy_location(self):
+        SellerLocationPreference.objects.create(
+            seller=self.seller,
+            show_country=False,
+            show_admin_area=False,
+            show_locality=False,
+            show_public_note=False,
+        )
+
+        profile = UserSerializer(self.seller).data
+        product = ProductDetailSerializer(self.product).data
+
+        self.assertEqual(profile["city"], "")
+        self.assertEqual(profile["country"], "")
+        self.assertEqual(profile["public_location_display"], "")
+        self.assertEqual(product["city"], "")
+        self.assertEqual(product["country"], "")
+        self.assertEqual(product["seller_location_display"], "")
+
+    def test_administrative_area_search_matches_alternate_names(self):
+        self.city.alt_names = ["Léopoldville"]
+        self.city.save(update_fields=["alt_names"])
+
+        response = APIClient().get(
+            "/api/v1/localization/areas/",
+            {"country": str(self.country.pk), "search": "leopold"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [area["id"] for area in response.data["results"]], [str(self.city.pk)]
+        )
 
     def test_seller_can_activate_and_disable_delivery_option(self):
         option = DeliveryOption.objects.get(seller=self.seller)
@@ -94,11 +246,18 @@ class LocalizationBackendTests(TestCase):
         self.assertFalse(DeliveryOption.objects.get(pk=option.pk).is_active)
 
     def test_cannot_create_invalid_location_chain(self):
-        with self.assertRaises(ValueError):
-            PrivateAddress.objects.create(
-                user=self.seller,
-                country=self.country,
-                administrative_area=self.province,
-                locality=None,
-                street_address="Rue 12",
-            )
+        other_country = Country.objects.create(code="AO", name="Angola")
+        client = APIClient()
+        client.force_authenticate(user=self.seller)
+        response = client.post(
+            "/api/v1/localization/addresses/",
+            {
+                "country_id": str(other_country.pk),
+                "administrative_area_id": str(self.province.pk),
+                "street_address": "Rue 12",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(PrivateAddress.objects.filter(user=self.seller).count(), 1)

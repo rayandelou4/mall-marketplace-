@@ -1,10 +1,12 @@
 import { apiRequest, unwrap } from "../../lib/apiClient";
 
-export function createOrder({ shippingAddress, items }) {
+export function createOrder({ shippingAddress, privateAddressId, items }) {
   return apiRequest("/orders/orders/", {
     method: "POST",
     body: {
-      shipping_address: shippingAddress,
+      ...(privateAddressId
+        ? { private_address_id: privateAddressId }
+        : { shipping_address: shippingAddress }),
       items: items.map((i) => ({
         product_id: i.product.id,
         quantity: i.quantity,

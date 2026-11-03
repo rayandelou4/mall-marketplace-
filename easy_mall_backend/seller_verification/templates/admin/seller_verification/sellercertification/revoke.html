@@ -1,0 +1,11 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>{{ title }}</h1>
+<p>{{ certification.user.username }} · {{ certification.get_level_display }}</p>
+<form method="post" onsubmit="return confirm('Révoquer cette certification ?');">
+  {% csrf_token %}
+  <p><label for="reason">Motif de révocation</label><br><textarea id="reason" name="reason" required maxlength="2000" rows="4" cols="70"></textarea></p>
+  <p><label><input type="checkbox" name="confirmed" required> Je confirme la révocation de cette certification.</label></p>
+  <button type="submit">Révoquer</button>
+</form>
+{% endblock %}

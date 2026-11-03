@@ -111,6 +111,8 @@ class PublicProfileView(generics.RetrieveAPIView):
 
 class EmailVerificationConfirmView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "email_verify"
+    throttle_classes = [ScopedRateThrottle]
 
     def post(self, request):
         serializer = EmailVerificationConfirmSerializer(data=request.data, context={"request": request})

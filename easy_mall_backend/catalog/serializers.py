@@ -2,15 +2,45 @@
 Serializers de l'app `catalog`.
 """
 
-
-
-
-
-
 from rest_framework import serializers
 from accounts.models import User
 
-from .models import Category, Favorite, Product, ProductImage, ProductVideo, SavedSearch, SellerFavorite
+from .models import (
+    Category,
+    Favorite,
+    Product,
+    ProductImage,
+    ProductVideo,
+    SavedSearch,
+    SellerFavorite,
+)
+
+
+def _public_seller_city(product):
+    location = getattr(product.seller, "public_location", None)
+    preference = getattr(product.seller, "location_preference", None)
+    if (
+        location is None
+        or preference is None
+        or not preference.show_locality
+        or location.precision
+        not in {location.Precision.CITY, location.Precision.LOCALITY}
+        or location.locality is None
+        or (
+            location.locality.level == "neighborhood"
+            and location.precision != location.Precision.LOCALITY
+        )
+    ):
+        return ""
+    return location.locality.name
+
+
+def _public_seller_country(product):
+    location = getattr(product.seller, "public_location", None)
+    preference = getattr(product.seller, "location_preference", None)
+    if location is None or (preference is not None and not preference.show_country):
+        return ""
+    return location.country.name
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -45,24 +75,39 @@ class ProductComparisonSerializer(serializers.ModelSerializer):
     """
 
     primary_image = serializers.SerializerMethodField()
-    condition_display = serializers.CharField(source="get_condition_display", read_only=True)
+    condition_display = serializers.CharField(
+        source="get_condition_display", read_only=True
+    )
     seller_username = serializers.CharField(source="seller.username", read_only=True)
     # seller_phone_number = serializers.SerializerMethodField()
     seller_rating = serializers.DecimalField(
         source="seller.average_rating", max_digits=3, decimal_places=2, read_only=True
     )
     estimated_delivery = serializers.SerializerMethodField()
+    city = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
-            "id", "title", "price", "currency", "city", "condition_display",
-            "seller_username", "seller_rating", "shipping_cost", "estimated_delivery", "primary_image",
+            "id",
+            "title",
+            "price",
+            "currency",
+            "city",
+            "condition_display",
+            "seller_username",
+            "seller_rating",
+            "shipping_cost",
+            "estimated_delivery",
+            "primary_image",
         ]
 
     def get_primary_image(self, obj):
         image = obj.images.filter(is_primary=True).first() or obj.images.first()
         return image.image_url if image else None
+
+    def get_city(self, obj):
+        return _public_seller_city(obj)
 
     def get_estimated_delivery(self, obj):
         reference_city = (self.context.get("reference_city") or "").strip().lower()
@@ -75,8 +120,12 @@ class ProductListSerializer(serializers.ModelSerializer):
     """Version allégée pour le catalogue/les listes (performance)."""
 
     primary_image = serializers.SerializerMethodField()
-    condition_display = serializers.CharField(source="get_condition_display", read_only=True)
-    price_unit_display = serializers.CharField(source="get_price_unit_display", read_only=True)
+    condition_display = serializers.CharField(
+        source="get_condition_display", read_only=True
+    )
+    price_unit_display = serializers.CharField(
+        source="get_price_unit_display", read_only=True
+    )
     seller_username = serializers.CharField(source="seller.username", read_only=True)
     seller_avatar_url = serializers.URLField(
         source="seller.avatar_url", read_only=True, allow_null=True
@@ -85,14 +134,31 @@ class ProductListSerializer(serializers.ModelSerializer):
         source="seller.average_rating", max_digits=3, decimal_places=2, read_only=True
     )
     seller_location_display = serializers.SerializerMethodField()
+    city = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
-            "id", "item_type", "title", "price", "currency", "price_unit", "price_unit_display", "condition", "condition_display", "city",
+            "id",
+            "item_type",
+            "title",
+            "price",
+            "currency",
+            "price_unit",
+            "price_unit_display",
+            "condition",
+            "condition_display",
+            "city",
             "seller_location_display",
-            "primary_image", "views_count", "favorites_count", "seller_username", "seller_avatar_url", "seller_rating",
-            "status", "moderation_status", "created_at",
+            "primary_image",
+            "views_count",
+            "favorites_count",
+            "seller_username",
+            "seller_avatar_url",
+            "seller_rating",
+            "status",
+            "moderation_status",
+            "created_at",
         ]
 
     def get_primary_image(self, obj):
@@ -101,9 +167,10 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_seller_location_display(self, obj):
         location = getattr(obj.seller, "public_location", None)
-        if location is not None:
-            return location.display_name
-        return ", ".join(part for part in (obj.city, obj.country) if part)
+        return location.display_name if location is not None else ""
+
+    def get_city(self, obj):
+        return _public_seller_city(obj)
 
 
 class ProductDetailSerializer(serializers.ModelSerializer):
@@ -116,23 +183,54 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     seller_rating = serializers.DecimalField(
         source="seller.average_rating", max_digits=3, decimal_places=2, read_only=True
     )
-    seller_total_sales = serializers.IntegerField(source="seller.total_sales", read_only=True)
+    seller_total_sales = serializers.IntegerField(
+        source="seller.total_sales", read_only=True
+    )
     category_name = serializers.CharField(source="category.name", read_only=True)
-    condition_display = serializers.CharField(source="get_condition_display", read_only=True)
-    price_unit_display = serializers.CharField(source="get_price_unit_display", read_only=True)
+    condition_display = serializers.CharField(
+        source="get_condition_display", read_only=True
+    )
+    price_unit_display = serializers.CharField(
+        source="get_price_unit_display", read_only=True
+    )
     is_available = serializers.ReadOnlyField()
     seller_location_display = serializers.SerializerMethodField()
+    city = serializers.SerializerMethodField()
+    country = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
-            "id", "item_type", "title", "description", "price", "currency", "price_unit", "price_unit_display", "condition", "condition_display",
-            "city", "country", "stock_quantity", "shipping_cost",
+            "id",
+            "item_type",
+            "title",
+            "description",
+            "price",
+            "currency",
+            "price_unit",
+            "price_unit_display",
+            "condition",
+            "condition_display",
+            "city",
+            "country",
+            "stock_quantity",
+            "shipping_cost",
             "seller_location_display",
-            "status", "moderation_status", "is_available", "views_count", "favorites_count",
-            "category", "category_name", "images", "video",
-            "seller_username", "seller_phone_number", "seller_rating", "seller_total_sales",
-            "created_at", "updated_at",
+            "status",
+            "moderation_status",
+            "is_available",
+            "views_count",
+            "favorites_count",
+            "category",
+            "category_name",
+            "images",
+            "video",
+            "seller_username",
+            "seller_phone_number",
+            "seller_rating",
+            "seller_total_sales",
+            "created_at",
+            "updated_at",
         ]
 
     def get_seller_phone_number(self, obj):
@@ -143,9 +241,13 @@ class ProductDetailSerializer(serializers.ModelSerializer):
 
     def get_seller_location_display(self, obj):
         location = getattr(obj.seller, "public_location", None)
-        if location is not None:
-            return location.display_name
-        return ", ".join(part for part in (obj.city, obj.country) if part)
+        return location.display_name if location is not None else ""
+
+    def get_city(self, obj):
+        return _public_seller_city(obj)
+
+    def get_country(self, obj):
+        return _public_seller_country(obj)
 
 
 class ProductCreateUpdateSerializer(serializers.ModelSerializer):
@@ -165,18 +267,35 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            "id", "item_type", "title", "description", "category", "price", "currency", "price_unit",
-            "condition", "city", "country", "stock_quantity", "shipping_cost", "status", "images",
+            "id",
+            "item_type",
+            "title",
+            "description",
+            "category",
+            "price",
+            "currency",
+            "price_unit",
+            "condition",
+            "city",
+            "country",
+            "stock_quantity",
+            "shipping_cost",
+            "status",
+            "images",
         ]
 
     def validate(self, attrs):
-        item_type = attrs.get("item_type", getattr(self.instance, "item_type", Product.ItemType.PRODUCT))
+        item_type = attrs.get(
+            "item_type", getattr(self.instance, "item_type", Product.ItemType.PRODUCT)
+        )
         if item_type == Product.ItemType.SERVICE:
             attrs["condition"] = ""
             attrs["stock_quantity"] = 1
             attrs["shipping_cost"] = 0
         elif not attrs.get("condition", getattr(self.instance, "condition", "")):
-            raise serializers.ValidationError({"condition": "L'état est obligatoire pour un produit."})
+            raise serializers.ValidationError(
+                {"condition": "L'état est obligatoire pour un produit."}
+            )
         return attrs
 
     def validate_images(self, value):
@@ -188,17 +307,28 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         images = validated_data.pop("images", [])
-        if validated_data.get("status") in (Product.Status.PUBLISHED, Product.Status.ARCHIVED):
+        if validated_data.get("status") in (
+            Product.Status.PUBLISHED,
+            Product.Status.ARCHIVED,
+        ):
             validated_data["moderation_status"] = Product.ModerationStatus.APPROVED
-        product = Product.objects.create(seller=self.context["request"].user, **validated_data)
+        product = Product.objects.create(
+            seller=self.context["request"].user, **validated_data
+        )
         self._save_images(product, images)
         return product
 
     def update(self, instance, validated_data):
         images = validated_data.pop("images", None)
-        if validated_data.get("status") in (Product.Status.PUBLISHED, Product.Status.ARCHIVED):
+        if validated_data.get("status") in (
+            Product.Status.PUBLISHED,
+            Product.Status.ARCHIVED,
+        ):
             validated_data["moderation_status"] = Product.ModerationStatus.APPROVED
-        elif validated_data.get("status") in (Product.Status.DRAFT, Product.Status.ARCHIVED):
+        elif validated_data.get("status") in (
+            Product.Status.DRAFT,
+            Product.Status.ARCHIVED,
+        ):
             validated_data["moderation_status"] = Product.ModerationStatus.PENDING
         instance = super().update(instance, validated_data)
         if images is not None:
@@ -210,7 +340,9 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
     def _save_images(product, image_urls):
         ProductImage.objects.bulk_create(
             [
-                ProductImage(product=product, image_url=url, order=i, is_primary=(i == 0))
+                ProductImage(
+                    product=product, image_url=url, order=i, is_primary=(i == 0)
+                )
                 for i, url in enumerate(image_urls)
             ]
         )
@@ -231,7 +363,9 @@ class FavoriteSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        return Favorite.objects.create(user=self.context["request"].user, **validated_data)
+        return Favorite.objects.create(
+            user=self.context["request"].user, **validated_data
+        )
 
 
 class SellerFavoriteSerializer(serializers.ModelSerializer):
@@ -252,20 +386,31 @@ class SellerFavoriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = SellerFavorite
         fields = [
-            "id", "seller", "seller_username", "seller_full_name", "seller_avatar_url",
-            "city", "country", "average_rating", "created_at",
+            "id",
+            "seller",
+            "seller_username",
+            "seller_full_name",
+            "seller_avatar_url",
+            "city",
+            "country",
+            "average_rating",
+            "created_at",
         ]
 
     def validate_seller(self, value):
         request = self.context["request"]
         if value.pk == request.user.pk:
-            raise serializers.ValidationError("Vous ne pouvez pas vous ajouter à vos vendeurs favoris.")
+            raise serializers.ValidationError(
+                "Vous ne pouvez pas vous ajouter à vos vendeurs favoris."
+            )
         if SellerFavorite.objects.filter(user=request.user, seller=value).exists():
             raise serializers.ValidationError("Ce vendeur est déjà dans vos favoris.")
         return value
 
     def create(self, validated_data):
-        return SellerFavorite.objects.create(user=self.context["request"].user, **validated_data)
+        return SellerFavorite.objects.create(
+            user=self.context["request"].user, **validated_data
+        )
 
 
 class SavedSearchSerializer(serializers.ModelSerializer):
@@ -274,4 +419,6 @@ class SavedSearchSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "query_params", "created_at"]
 
     def create(self, validated_data):
-        return SavedSearch.objects.create(user=self.context["request"].user, **validated_data) 
+        return SavedSearch.objects.create(
+            user=self.context["request"].user, **validated_data
+        )

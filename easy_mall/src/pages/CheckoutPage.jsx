@@ -8,7 +8,12 @@ import { Button, TextField } from "../components/ui/FormControls";
 import { useTheme } from "../features/theme/ThemeContext";
 import { useAuth } from "../features/auth/AuthContext";
 import { useCart } from "../features/cart/CartContext";
-import { fetchCountries, fetchAreas } from "../features/localization/api";
+import {
+  createPrivateAddress,
+  fetchCountries,
+  fetchAreas,
+  fetchPrivateAddresses,
+} from "../features/localization/api";
 import { createOrder } from "../features/orders/api";
 import { formatPrice } from "../lib/format";
 import { cx } from "../styles/theme";
@@ -31,11 +36,21 @@ export default function CheckoutPage() {
     && quantity > Number(product.stock_quantity)
   ));
 
-  const [shippingAddress, setShippingAddress] = useState("");
+  const [privateAddresses, setPrivateAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState("");
+  const [isAddingAddress, setIsAddingAddress] = useState(false);
+  const [addressDraft, setAddressDraft] = useState({
+    label: "",
+    countryId: "",
+    areaId: "",
+    streetAddress: "",
+    landmark: "",
+    phoneNumber: "",
+  });
   const [countries, setCountries] = useState([]);
   const [areas, setAreas] = useState([]);
-  const [selectedCountryId, setSelectedCountryId] = useState("");
-  const [selectedAreaId, setSelectedAreaId] = useState("");
+  const [addressLoading, setAddressLoading] = useState(false);
+  const [addressError, setAddressError] = useState(null);
   const [step, setStep] = useState("form");
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -54,26 +69,65 @@ export default function CheckoutPage() {
   }, []);
 
   useEffect(() => {
-    if (!selectedCountryId) {
+    if (!isAuthenticated) return;
+    fetchPrivateAddresses()
+      .then((savedAddresses) => {
+        setPrivateAddresses(savedAddresses);
+        setSelectedAddressId(
+          savedAddresses.find((address) => address.is_default)?.id
+            || savedAddresses[0]?.id
+            || ""
+        );
+      })
+      .catch((err) => setAddressError(err.message));
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!addressDraft.countryId) {
       setAreas([]);
-      setSelectedAreaId("");
+      setAddressDraft((current) => ({ ...current, areaId: "" }));
       return;
     }
-    fetchAreas({ country: selectedCountryId, level: "province" }).then(setAreas).catch(() => setAreas([]));
-  }, [selectedCountryId]);
+    fetchAreas({ country: addressDraft.countryId, level: "province" })
+      .then(setAreas)
+      .catch(() => setAreas([]));
+  }, [addressDraft.countryId]);
 
-  const selectedCountry = countries.find((country) => country.id === selectedCountryId) || null;
-  const selectedArea = areas.find((area) => area.id === selectedAreaId) || null;
-  const formattedShippingAddress = [selectedCountry?.name, selectedArea?.name, shippingAddress]
-    .filter(Boolean)
-    .join(", ");
+  const selectedAddress = privateAddresses.find((address) => address.id === selectedAddressId) || null;
+
+  async function handleSaveAddress() {
+    setAddressLoading(true);
+    setAddressError(null);
+    try {
+      const savedAddress = await createPrivateAddress({
+        label: addressDraft.label,
+        country_id: addressDraft.countryId,
+        administrative_area_id: addressDraft.areaId || null,
+        street_address: addressDraft.streetAddress,
+        landmark: addressDraft.landmark,
+        phone_number: addressDraft.phoneNumber,
+        is_default: privateAddresses.length === 0,
+      });
+      setPrivateAddresses((current) => [savedAddress, ...current]);
+      setSelectedAddressId(savedAddress.id);
+      setIsAddingAddress(false);
+    } catch (err) {
+      setAddressError(err.message);
+    } finally {
+      setAddressLoading(false);
+    }
+  }
 
   async function handleConfirmOrder(e) {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      const createdOrder = await createOrder({ shippingAddress: formattedShippingAddress, items: checkoutItems });
+      if (!selectedAddressId) {
+        setError("Sélectionnez ou ajoutez une adresse de livraison.");
+        return;
+      }
+      const createdOrder = await createOrder({ privateAddressId: selectedAddressId, items: checkoutItems });
       setOrder(createdOrder);
       clearCurrency(activeCurrency);
       setStep("done");
@@ -124,39 +178,72 @@ export default function CheckoutPage() {
               </div>}
             </div>
 
-            <TextField
-              label="Adresse de livraison"
-              value={shippingAddress}
-              onChange={setShippingAddress}
-              placeholder="Quartier, avenue, ville, pays"
-              required
-              t={t}
-            />
+            <section className={cx("rounded-2xl border p-4", t.cardBorder, t.cardBg)}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className={cx("text-sm font-semibold", t.textPrimary)}>Adresse de livraison</h2>
+                  <p className={cx("mt-1 text-xs", t.textMuted)}>Visible uniquement pour vous et les personnes autorisées à traiter cette commande.</p>
+                </div>
+                {privateAddresses.length > 0 && (
+                  <button type="button" onClick={() => setIsAddingAddress(!isAddingAddress)} className="text-sm font-semibold text-indigo-600">
+                    {isAddingAddress ? "Choisir une adresse" : "Ajouter une adresse"}
+                  </button>
+                )}
+              </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Pays</span>
-                <select value={selectedCountryId} onChange={(event) => { setSelectedCountryId(event.target.value); setSelectedAreaId(""); }} className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
-                  <option value="">Sélectionner</option>
-                  {countries.map((country) => (
-                    <option key={country.id} value={country.id}>{country.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
-                <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Province</span>
-                <select value={selectedAreaId} onChange={(event) => setSelectedAreaId(event.target.value)} className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)} disabled={!selectedCountryId}>
-                  <option value="">Sélectionner</option>
-                  {areas.map((area) => (
-                    <option key={area.id} value={area.id}>{area.name}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
+              {addressError && <p role="alert" className="mt-3 text-sm text-rose-600">{addressError}</p>}
 
-            <p className={cx("text-xs", t.textMuted)}>
-              Adresse finale: {formattedShippingAddress || "Compléter la livraison"}
-            </p>
+              {!isAddingAddress && privateAddresses.length > 0 && (
+                <div className="mt-4 flex flex-col gap-3">
+                  <label className="block">
+                    <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Adresse enregistrée</span>
+                    <select value={selectedAddressId} onChange={(event) => setSelectedAddressId(event.target.value)} required className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
+                      <option value="">Sélectionner une adresse</option>
+                      {privateAddresses.map((address) => (
+                        <option key={address.id} value={address.id}>
+                          {[address.label || "Adresse", address.locality?.name, address.administrative_area?.name, address.country?.name].filter(Boolean).join(" · ")}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {selectedAddress && (
+                    <p className={cx("text-sm", t.textMuted)}>
+                      {[selectedAddress.street_address, selectedAddress.landmark, selectedAddress.locality?.name, selectedAddress.administrative_area?.name, selectedAddress.country?.name].filter(Boolean).join(", ")}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {(isAddingAddress || privateAddresses.length === 0) && (
+                <div className="mt-4 flex flex-col gap-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <TextField label="Nom de l’adresse (facultatif)" value={addressDraft.label} onChange={(value) => setAddressDraft((current) => ({ ...current, label: value }))} placeholder="Maison, travail" t={t} />
+                    <label className="block">
+                      <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Pays</span>
+                      <select value={addressDraft.countryId} onChange={(event) => setAddressDraft((current) => ({ ...current, countryId: event.target.value, areaId: "" }))} required className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
+                        <option value="">Sélectionner</option>
+                        {countries.map((country) => <option key={country.id} value={country.id}>{country.name}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Province ou région (facultatif)</span>
+                    <select value={addressDraft.areaId} onChange={(event) => setAddressDraft((current) => ({ ...current, areaId: event.target.value }))} disabled={!addressDraft.countryId} className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
+                      <option value="">Sélectionner</option>
+                      {areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
+                    </select>
+                  </label>
+                  <TextField label="Adresse détaillée" value={addressDraft.streetAddress} onChange={(value) => setAddressDraft((current) => ({ ...current, streetAddress: value }))} placeholder="Avenue, numéro ou repère" required t={t} />
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <TextField label="Repère (facultatif)" value={addressDraft.landmark} onChange={(value) => setAddressDraft((current) => ({ ...current, landmark: value }))} placeholder="Près du marché" t={t} />
+                    <TextField label="Téléphone (facultatif)" value={addressDraft.phoneNumber} onChange={(value) => setAddressDraft((current) => ({ ...current, phoneNumber: value }))} type="tel" autoComplete="tel" t={t} />
+                  </div>
+                  <Button type="button" loading={addressLoading} disabled={addressLoading || !addressDraft.countryId || !addressDraft.streetAddress.trim()} onClick={handleSaveAddress}>
+                    Enregistrer cette adresse
+                  </Button>
+                </div>
+              )}
+            </section>
 
             <fieldset>
               <legend className={cx("mb-2 block text-sm font-medium", t.textPrimary)}>Moyen de paiement</legend>
@@ -173,7 +260,7 @@ export default function CheckoutPage() {
               </div>
             </fieldset>
 
-            <Button type="submit" loading={loading} disabled={loading || !activeCurrency || checkoutItems.length === 0 || hasUnavailableStock}>Enregistrer la commande {activeCurrency}</Button>
+            <Button type="submit" loading={loading} disabled={loading || !selectedAddressId || !activeCurrency || checkoutItems.length === 0 || hasUnavailableStock}>Enregistrer la commande {activeCurrency}</Button>
           </form>
         )}
 

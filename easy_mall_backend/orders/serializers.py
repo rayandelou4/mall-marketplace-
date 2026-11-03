@@ -14,6 +14,7 @@ from catalog.models import Product
 from notifications.models import Notification
 from notifications.services import notify
 from payments.models import Payment
+from localization.models import PrivateAddress
 
 from .models import Order, OrderItem
 
@@ -23,16 +24,31 @@ class OrderItemSerializer(serializers.ModelSerializer):
     subtotal = serializers.ReadOnlyField()
     # La devise vit sur la commande parente, pas sur la ligne elle-même.
     currency = serializers.CharField(source="order.currency", read_only=True)
-    payment_method = serializers.CharField(source="order.payment_method", read_only=True)
+    payment_method = serializers.CharField(
+        source="order.payment_method", read_only=True
+    )
     order_status = serializers.CharField(source="order.status", read_only=True)
-    order_created_at = serializers.DateTimeField(source="order.created_at", read_only=True)
+    order_created_at = serializers.DateTimeField(
+        source="order.created_at", read_only=True
+    )
 
     class Meta:
         model = OrderItem
         fields = [
-            "id", "order", "order_status", "order_created_at", "product", "product_title",
-            "seller_username", "quantity", "unit_price", "shipping_cost", "subtotal", "currency",
-            "payment_method", "is_shipped",
+            "id",
+            "order",
+            "order_status",
+            "order_created_at",
+            "product",
+            "product_title",
+            "seller_username",
+            "quantity",
+            "unit_price",
+            "shipping_cost",
+            "subtotal",
+            "currency",
+            "payment_method",
+            "is_shipped",
         ]
 
 
@@ -45,8 +61,14 @@ class OrderListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            "id", "status", "payment_method", "total_amount", "currency",
-            "items_count", "sellers", "created_at",
+            "id",
+            "status",
+            "payment_method",
+            "total_amount",
+            "currency",
+            "items_count",
+            "sellers",
+            "created_at",
         ]
 
     def get_sellers(self, obj):
@@ -59,8 +81,15 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            "id", "status", "payment_method", "total_amount", "currency",
-            "shipping_address", "items", "created_at", "updated_at",
+            "id",
+            "status",
+            "payment_method",
+            "total_amount",
+            "currency",
+            "shipping_address",
+            "items",
+            "created_at",
+            "updated_at",
         ]
 
 
@@ -71,8 +100,39 @@ class OrderCreateSerializer(serializers.Serializer):
     `OrderItem.product_title` / `unit_price` dans le modèle.
     """
 
-    shipping_address = serializers.CharField()
+    shipping_address = serializers.CharField(required=False, allow_blank=False)
+    private_address_id = serializers.UUIDField(required=False, write_only=True)
     items = serializers.ListField(child=serializers.DictField(), allow_empty=False)
+
+    def validate(self, attrs):
+        address_id = attrs.pop("private_address_id", None)
+        if address_id:
+            buyer = self.context["request"].user
+            address = (
+                PrivateAddress.objects.filter(pk=address_id, user=buyer)
+                .select_related("country", "administrative_area", "locality")
+                .first()
+            )
+            if address is None:
+                raise serializers.ValidationError(
+                    {"private_address_id": "Adresse introuvable ou non autorisée."}
+                )
+            parts = [
+                address.country.name,
+                address.administrative_area.name if address.administrative_area else "",
+                address.locality.name if address.locality else "",
+                address.street_address,
+                address.landmark,
+            ]
+            attrs["shipping_address"] = ", ".join(part for part in parts if part)
+            attrs["shipping_address_record"] = address
+        elif not attrs.get("shipping_address", "").strip():
+            raise serializers.ValidationError(
+                {
+                    "shipping_address": "Choisissez une adresse enregistrée ou indiquez une adresse de livraison."
+                }
+            )
+        return attrs
 
     def validate_items(self, value):
         requested_quantities = {}
@@ -92,17 +152,24 @@ class OrderCreateSerializer(serializers.Serializer):
                 ) from exc
             if quantity < 1:
                 raise serializers.ValidationError("La quantité doit être au moins 1.")
-            requested_quantities[product_id] = requested_quantities.get(product_id, 0) + quantity
+            requested_quantities[product_id] = (
+                requested_quantities.get(product_id, 0) + quantity
+            )
             try:
                 expected_unit_price = (
                     Decimal(str(entry["unit_price"])) if "unit_price" in entry else None
                 )
                 expected_shipping_cost = (
-                    Decimal(str(entry["shipping_cost"])) if "shipping_cost" in entry else None
+                    Decimal(str(entry["shipping_cost"]))
+                    if "shipping_cost" in entry
+                    else None
                 )
                 if (
-                    (expected_unit_price is not None and not expected_unit_price.is_finite())
-                    or (expected_shipping_cost is not None and not expected_shipping_cost.is_finite())
+                    expected_unit_price is not None
+                    and not expected_unit_price.is_finite()
+                ) or (
+                    expected_shipping_cost is not None
+                    and not expected_shipping_cost.is_finite()
                 ):
                     raise InvalidOperation
             except (InvalidOperation, TypeError, ValueError) as exc:
@@ -110,7 +177,10 @@ class OrderCreateSerializer(serializers.Serializer):
                     "Le prix ou les frais de livraison transmis sont invalides."
                 ) from exc
             expected = (expected_unit_price, expected_shipping_cost)
-            if product_id in expected_prices and expected_prices[product_id] != expected:
+            if (
+                product_id in expected_prices
+                and expected_prices[product_id] != expected
+            ):
                 raise serializers.ValidationError(
                     "Les informations de prix sont incohérentes pour un même article."
                 )
@@ -138,32 +208,37 @@ class OrderCreateSerializer(serializers.Serializer):
             product = products[product_id]
             expected_unit_price, expected_shipping_cost = expected_prices[product_id]
             if (
-                (expected_unit_price is not None and expected_unit_price != product.price)
-                or (
-                    expected_shipping_cost is not None
-                    and expected_shipping_cost != product.shipping_cost
-                )
+                expected_unit_price is not None and expected_unit_price != product.price
+            ) or (
+                expected_shipping_cost is not None
+                and expected_shipping_cost != product.shipping_cost
             ):
                 raise serializers.ValidationError(
                     f"Le prix ou les frais de livraison de « {product.title} » ont changé. "
                     "Actualisez votre panier avant de commander."
                 )
             if product.status == Product.Status.ARCHIVED:
-                raise serializers.ValidationError(f"« {product.title} » est archivé et ne peut plus être acheté.")
+                raise serializers.ValidationError(
+                    f"« {product.title} » est archivé et ne peut plus être acheté."
+                )
             if not product.is_available:
-                raise serializers.ValidationError(f"« {product.title} » n'est plus disponible.")
+                raise serializers.ValidationError(
+                    f"« {product.title} » n'est plus disponible."
+                )
             if product.stock_quantity < quantity:
                 raise serializers.ValidationError(
                     f"Stock insuffisant pour « {product.title} » "
                     f"({product.stock_quantity} disponible(s))."
                 )
 
-            cleaned.append({
-                "product": product,
-                "quantity": quantity,
-                "expected_unit_price": expected_unit_price,
-                "expected_shipping_cost": expected_shipping_cost,
-            })
+            cleaned.append(
+                {
+                    "product": product,
+                    "quantity": quantity,
+                    "expected_unit_price": expected_unit_price,
+                    "expected_shipping_cost": expected_shipping_cost,
+                }
+            )
         return cleaned
 
     @transaction.atomic
@@ -175,7 +250,8 @@ class OrderCreateSerializer(serializers.Serializer):
         }
         expected_prices = {
             entry["product"].pk: (
-                entry["expected_unit_price"], entry["expected_shipping_cost"]
+                entry["expected_unit_price"],
+                entry["expected_shipping_cost"],
             )
             for entry in requested_items
         }
@@ -187,25 +263,28 @@ class OrderCreateSerializer(serializers.Serializer):
             .order_by("pk")
         }
         if locked_products.keys() != requested_quantities.keys():
-            raise serializers.ValidationError("Un article du panier n'est plus disponible.")
+            raise serializers.ValidationError(
+                "Un article du panier n'est plus disponible."
+            )
 
         items_data = []
         for product_id, quantity in requested_quantities.items():
             product = locked_products[product_id]
             expected_unit_price, expected_shipping_cost = expected_prices[product_id]
             if (
-                (expected_unit_price is not None and expected_unit_price != product.price)
-                or (
-                    expected_shipping_cost is not None
-                    and expected_shipping_cost != product.shipping_cost
-                )
+                expected_unit_price is not None and expected_unit_price != product.price
+            ) or (
+                expected_shipping_cost is not None
+                and expected_shipping_cost != product.shipping_cost
             ):
                 raise serializers.ValidationError(
                     f"Le prix ou les frais de livraison de « {product.title} » ont changé. "
                     "Actualisez votre panier avant de commander."
                 )
             if product.status == Product.Status.ARCHIVED or not product.is_available:
-                raise serializers.ValidationError(f"« {product.title} » n'est plus disponible.")
+                raise serializers.ValidationError(
+                    f"« {product.title} » n'est plus disponible."
+                )
             if product.stock_quantity < quantity:
                 raise serializers.ValidationError(
                     f"Stock insuffisant pour « {product.title} » "
@@ -221,6 +300,7 @@ class OrderCreateSerializer(serializers.Serializer):
         order = Order.objects.create(
             buyer=buyer,
             shipping_address=self.validated_data["shipping_address"],
+            shipping_address_record=self.validated_data.get("shipping_address_record"),
             currency=items_data[0]["product"].currency,
             payment_method=(
                 Order.PaymentMethod.MOBILE_MONEY
@@ -259,9 +339,9 @@ class OrderCreateSerializer(serializers.Serializer):
         seller_items = {}
         for entry in items_data:
             seller = entry["product"].seller
-            seller_items.setdefault(seller.pk, {"seller": seller, "titles": []})["titles"].append(
-                entry["product"].title
-            )
+            seller_items.setdefault(seller.pk, {"seller": seller, "titles": []})[
+                "titles"
+            ].append(entry["product"].title)
         for seller_data in seller_items.values():
             titles = ", ".join(seller_data["titles"])
             notify(
@@ -317,7 +397,6 @@ class OrderCancelSerializer(serializers.Serializer):
                 and product.moderation_status == Product.ModerationStatus.APPROVED
             ):
 
-            
                 restored_status = Product.Status.PUBLISHED
             Product.objects.filter(pk=product.pk).update(
                 stock_quantity=F("stock_quantity") + item.quantity,

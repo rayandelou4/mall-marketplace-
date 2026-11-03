@@ -39,7 +39,9 @@ class Order(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="orders"
     )
 
-    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.PENDING
+    )
     payment_method = models.CharField(
         max_length=20, choices=PaymentMethod.choices, default=PaymentMethod.CASH
     )
@@ -47,6 +49,13 @@ class Order(models.Model):
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     currency = models.CharField(max_length=3, default="USD")
     shipping_address = models.TextField(blank=True)
+    shipping_address_record = models.ForeignKey(
+        "localization.PrivateAddress",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -88,10 +97,15 @@ class OrderItem(models.Model):
 
     # SET_NULL : la ligne de commande doit survivre à la suppression du produit.
     product = models.ForeignKey(
-        "catalog.Product", on_delete=models.SET_NULL, null=True, related_name="order_items"
+        "catalog.Product",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="order_items",
     )
     seller = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="sold_order_items"
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="sold_order_items",
     )
 
     product_title = models.CharField(max_length=150)

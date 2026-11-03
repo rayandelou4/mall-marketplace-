@@ -9,12 +9,28 @@ router = DefaultRouter()
 router.register("countries", views.CountryViewSet, basename="country")
 router.register("areas", views.AdministrativeAreaViewSet, basename="area")
 router.register("addresses", views.PrivateAddressViewSet, basename="address")
-router.register("pickup-locations", views.PickupLocationViewSet, basename="pickup-location")
-router.register("delivery-options", views.DeliveryOptionViewSet, basename="delivery-option")
+router.register(
+    "pickup-locations", views.PickupLocationViewSet, basename="pickup-location"
+)
+router.register(
+    "delivery-options", views.DeliveryOptionViewSet, basename="delivery-option"
+)
 
 urlpatterns = [
     path("", include(router.urls)),
-    path("seller-location/<slug:username>/", views.SellerPublicLocationView.as_view(), name="seller-location-detail"),
-    path("seller-location/me/", views.SellerPublicLocationView.as_view(), name="seller-location-me"),
-    path("seller-location/preferences/", views.SellerLocationPreferenceView.as_view(), name="seller-location-preferences"),
+    path(
+        "seller-location/me/",
+        views.SellerPublicLocationView.as_view(),
+        name="seller-location-me",
+    ),
+    path(
+        "seller-location/<slug:username>/",
+        views.SellerPublicLocationView.as_view(),
+        name="seller-location-detail",
+    ),
+    path(
+        "seller-location/preferences/",
+        views.SellerLocationPreferenceView.as_view(),
+        name="seller-location-preferences",
+    ),
 ]

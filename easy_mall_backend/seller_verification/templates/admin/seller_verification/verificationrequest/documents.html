@@ -1,0 +1,15 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>{{ title }}</h1>
+<p>Les documents sont privés et visibles uniquement aux réviseurs habilités.</p>
+<ul>
+  {% for document in documents %}
+    <li>
+      {{ document.get_document_type_display|default:document.document_type }} · {{ document.file_size|filesizeformat }} ·
+      <a href="{% url 'admin:seller_verification_verificationrequest_document_download' verification_request.id document.id %}">Télécharger</a>
+    </li>
+  {% empty %}
+    <li>Aucun document.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

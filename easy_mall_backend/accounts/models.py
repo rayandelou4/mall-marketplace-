@@ -10,6 +10,7 @@ opération lourde).
 """
 
 import random
+import secrets
 import string
 import uuid
 from datetime import timedelta
@@ -180,19 +181,26 @@ class EmailVerificationToken(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     is_used = models.BooleanField(default=False)
+    attempts = models.PositiveSmallIntegerField(default=0)
+
+    MAX_ATTEMPTS = 5
 
     class Meta:
         db_table = "email_verification_tokens"
 
     def save(self, *args, **kwargs):
         if not self.code:
-            self.code = "".join(random.choices(string.digits, k=6))
+            self.code = "".join(secrets.choice(string.digits) for _ in range(6))
         if not self.expires_at:
             self.expires_at = timezone.now() + timedelta(hours=24)
         super().save(*args, **kwargs)
 
     def is_valid(self):
-        return not self.is_used and timezone.now() < self.expires_at
+        return (
+            not self.is_used
+            and self.attempts < self.MAX_ATTEMPTS
+            and timezone.now() < self.expires_at
+        )
 
 
 class PhoneOTP(models.Model):

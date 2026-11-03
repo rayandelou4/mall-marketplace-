@@ -10,9 +10,14 @@ from catalog.models import Category, Product
 from payments.models import Payment, PaymentProvider
 from payments.serializers import PaymentInitiateSerializer
 from notifications.models import Notification
+from localization.models import Country, PrivateAddress
 
 from .models import Order
-from .serializers import OrderCancelSerializer, OrderCreateSerializer
+from .serializers import (
+    OrderCancelSerializer,
+    OrderCreateSerializer,
+    OrderDetailSerializer,
+)
 
 
 class OrderCheckoutTests(TestCase):
@@ -62,6 +67,54 @@ class OrderCheckoutTests(TestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock_quantity, 3)
 
+    def test_checkout_uses_only_buyers_saved_address_and_keeps_snapshot(self):
+        country = Country.objects.create(code="CD", name="RDC")
+        address = PrivateAddress.objects.create(
+            user=self.buyer,
+            country=country,
+            street_address="Avenue de la Paix 12",
+            landmark="Près du marché",
+        )
+        serializer = OrderCreateSerializer(
+            data={
+                "private_address_id": str(address.pk),
+                "items": [{"product_id": str(self.product.pk), "quantity": 1}],
+            },
+            context={"request": self.request},
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+        snapshot = order.shipping_address
+        self.assertEqual(order.shipping_address_record_id, address.pk)
+        self.assertIn("Avenue de la Paix 12", snapshot)
+
+        address.street_address = "Nouvelle adresse"
+        address.save(update_fields=["street_address"])
+        order.refresh_from_db()
+        response_data = OrderDetailSerializer(order).data
+        self.assertEqual(order.shipping_address, snapshot)
+        self.assertNotIn("shipping_address_record", response_data)
+        self.assertEqual(response_data["shipping_address"], snapshot)
+
+    def test_checkout_rejects_another_users_saved_address(self):
+        country = Country.objects.create(code="CD", name="RDC")
+        address = PrivateAddress.objects.create(
+            user=self.seller,
+            country=country,
+            street_address="Adresse du vendeur",
+        )
+        serializer = OrderCreateSerializer(
+            data={
+                "private_address_id": str(address.pk),
+                "items": [{"product_id": str(self.product.pk), "quantity": 1}],
+            },
+            context={"request": self.request},
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("private_address_id", serializer.errors)
+
     def test_order_creation_notifies_each_seller_once(self):
         second_product = Product.objects.create(
             seller=self.seller,
@@ -77,10 +130,12 @@ class OrderCheckoutTests(TestCase):
             moderation_status=Product.ModerationStatus.APPROVED,
         )
 
-        self.create_order([
-            {"product_id": str(self.product.pk), "quantity": 1},
-            {"product_id": str(second_product.pk), "quantity": 1},
-        ])
+        self.create_order(
+            [
+                {"product_id": str(self.product.pk), "quantity": 1},
+                {"product_id": str(second_product.pk), "quantity": 1},
+            ]
+        )
 
         notifications = Notification.objects.filter(
             user=self.seller,
@@ -111,7 +166,9 @@ class OrderCheckoutTests(TestCase):
         )
         self.assertFalse(payment_serializer.is_valid())
 
-    def test_cash_confirmation_delivers_pending_order_once_and_notifies_each_seller(self):
+    def test_cash_confirmation_delivers_pending_order_once_and_notifies_each_seller(
+        self,
+    ):
         second_seller = User.objects.create_user(
             email="seller2@example.com",
             phone_number="+10000000003",
@@ -131,10 +188,12 @@ class OrderCheckoutTests(TestCase):
             status=Product.Status.PUBLISHED,
             moderation_status=Product.ModerationStatus.APPROVED,
         )
-        order = self.create_order([
-            {"product_id": str(self.product.pk), "quantity": 1},
-            {"product_id": str(second_product.pk), "quantity": 1},
-        ])
+        order = self.create_order(
+            [
+                {"product_id": str(self.product.pk), "quantity": 1},
+                {"product_id": str(second_product.pk), "quantity": 1},
+            ]
+        )
         self.assertEqual(order.payment_method, Order.PaymentMethod.CASH)
         client = APIClient()
 
@@ -231,12 +290,14 @@ class OrderCheckoutTests(TestCase):
         serializer = OrderCreateSerializer(
             data={
                 "shipping_address": "Adresse test",
-                "items": [{
-                    "product_id": str(self.product.pk),
-                    "quantity": 1,
-                    "unit_price": "9.00",
-                    "shipping_cost": "3.00",
-                }],
+                "items": [
+                    {
+                        "product_id": str(self.product.pk),
+                        "quantity": 1,
+                        "unit_price": "9.00",
+                        "shipping_cost": "3.00",
+                    }
+                ],
             },
             context={"request": self.request},
         )
