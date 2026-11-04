@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.contrib.auth.models import Permission
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -142,6 +143,126 @@ class ModerationAPITests(TestCase):
             format="json",
         )
         self.assertEqual(admin_decision.status_code, 200, admin_decision.content)
+
+    def test_staff_requires_model_permissions_for_global_reports_and_decisions(self):
+        self.client.force_authenticate(self.buyer)
+        create_response = self.client.post(
+            "/api/v1/moderation/reports/",
+            {
+                "product_id": str(self.product.id),
+                "reason": "misleading_description",
+                "description": "Signalement à examiner.",
+            },
+            format="json",
+        )
+        report_id = create_response.data["id"]
+
+        staff = User.objects.create_user(
+            email="staff@mall.test",
+            phone_number="+243000000005",
+            username="staff",
+            password="Staff123!",
+            is_staff=True,
+        )
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get("/api/v1/moderation/reports/").status_code, 403)
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/moderation/reports/{report_id}/decide/",
+                {"decision": "reject", "reason": "Rejeté."},
+                format="json",
+            ).status_code,
+            403,
+        )
+
+        staff.user_permissions.add(
+            Permission.objects.get(
+                content_type__app_label="moderation", codename="view_productreport"
+            )
+        )
+        self.client.force_authenticate(User.objects.get(pk=staff.pk))
+        list_response = self.client.get("/api/v1/moderation/reports/")
+        self.assertEqual(list_response.status_code, 200, list_response.content)
+        self.assertEqual(list_response.data["results"][0]["id"], report_id)
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/moderation/reports/{report_id}/decide/",
+                {"decision": "reject", "reason": "Rejeté."},
+                format="json",
+            ).status_code,
+            403,
+        )
+
+        staff.user_permissions.add(
+            Permission.objects.get(
+                content_type__app_label="moderation", codename="change_productreport"
+            )
+        )
+        self.client.force_authenticate(User.objects.get(pk=staff.pk))
+        decision_response = self.client.post(
+            f"/api/v1/moderation/reports/{report_id}/decide/",
+            {"decision": "reject", "reason": "Signalement non fondé."},
+            format="json",
+        )
+        self.assertEqual(decision_response.status_code, 200, decision_response.content)
+        self.assertTrue(
+            self.product.reports.get(id=report_id).history.filter(actor=staff).exists()
+        )
+
+    def test_non_staff_cannot_access_another_users_report_by_changing_id(self):
+        self.client.force_authenticate(self.buyer)
+        create_response = self.client.post(
+            "/api/v1/moderation/reports/",
+            {
+                "product_id": str(self.product.id),
+                "reason": "misleading_description",
+                "description": "Signalement privé au déclarant.",
+            },
+            format="json",
+        )
+        report_id = create_response.data["id"]
+        own_reports = self.client.get("/api/v1/moderation/reports/")
+        self.assertEqual(own_reports.status_code, 200, own_reports.content)
+        self.assertEqual(len(own_reports.data["results"]), 1)
+
+        other_buyer = User.objects.create_user(
+            email="other-buyer@mall.test",
+            phone_number="+243000000006",
+            username="otherbuyer",
+            password="OtherBuyer123!",
+        )
+        self.client.force_authenticate(other_buyer)
+        self.assertEqual(
+            self.client.get(f"/api/v1/moderation/reports/{report_id}/").status_code,
+            404,
+        )
+
+    def test_staff_requires_model_permission_for_global_disputes(self):
+        self.client.force_authenticate(self.buyer)
+        create_response = self.client.post(
+            "/api/v1/moderation/disputes/",
+            {"order_id": str(self.order.id), "reason": "Commande non reçue."},
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201, create_response.content)
+
+        staff = User.objects.create_user(
+            email="dispute-staff@mall.test",
+            phone_number="+243000000007",
+            username="disputestaff",
+            password="DisputeStaff123!",
+            is_staff=True,
+        )
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get("/api/v1/moderation/disputes/").status_code, 403)
+
+        staff.user_permissions.add(
+            Permission.objects.get(content_type__app_label="moderation", codename="view_dispute")
+        )
+        self.client.force_authenticate(User.objects.get(pk=staff.pk))
+        response = self.client.get("/api/v1/moderation/disputes/")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(len(response.data["results"]), 1)
 
     def test_buyer_can_open_dispute_on_own_order(self):
         self.client.force_authenticate(self.buyer)

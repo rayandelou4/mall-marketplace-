@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { Heart, MapPin, MessageCircle, ShoppingCart, Star, ImageOff, Truck } from "lucide-react";
+import { Heart, MapPin, MessageCircle, ShoppingCart, Star, ImageOff } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { ProductCard } from "../components/catalog/ProductCard";
@@ -15,6 +15,19 @@ import { formatPrice } from "../lib/format";
 import { createWhatsAppUrl } from "../lib/whatsapp";
 import { cx } from "../styles/theme";
 
+function loadComparisonPage(productId, page, setComparisonState) {
+  setComparisonState((current) => ({ ...current, loading: true, error: null }));
+  fetchComparisons(productId, { page })
+    .then((data) => setComparisonState((current) => ({
+      ...current,
+      ...data,
+      loading: false,
+      error: null,
+      similar: data.similar?.length ? data.similar : current.similar,
+    })))
+    .catch((error) => setComparisonState((current) => ({ ...current, loading: false, error: error.message })));
+}
+
 export default function ProductPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -23,7 +36,7 @@ export default function ProductPage() {
   const { addItem } = useCart();
 
   const [state, setState] = useState({ loading: true, error: null, product: null });
-  const [comparisons, setComparisons] = useState([]);
+  const [comparisonState, setComparisonState] = useState({ loading: false, error: null, exact: null, similar: [] });
   const [reviews, setReviews] = useState([]);
   const [activeImage, setActiveImage] = useState(0);
   const [actionNotice, setActionNotice] = useState(null);
@@ -37,7 +50,7 @@ export default function ProductPage() {
     let cancelled = false;
     setState({ loading: true, error: null, product: null });
     setActiveImage(0);
-    setComparisons([]);
+    setComparisonState({ loading: false, error: null, exact: null, similar: [] });
 
     fetchProduct(id)
       .then((product) => {
@@ -47,9 +60,9 @@ export default function ProductPage() {
           .then((items) => !cancelled && setReviews(items))
           .catch(() => {});
         if (product.item_type !== "service") {
-          fetchComparisons(id)
-            .then((items) => !cancelled && setComparisons(items))
-            .catch(() => {});
+          loadComparisonPage(id, 1, (nextState) => {
+            if (!cancelled) setComparisonState(nextState);
+          });
         }
       })
       .catch((err) => {
@@ -104,6 +117,7 @@ export default function ProductPage() {
   }
 
   const { loading, error, product } = state;
+  const { exact: exactComparison, similar: similarProducts, loading: comparisonsLoading, error: comparisonsError } = comparisonState;
   const canBuy = product?.status === "published" && product?.is_available;
   const productUrl = product ? `${window.location.origin}/produit/${product.id}` : "";
   const shareText = product ? `Je viens de trouver cette annonce sur Easy Mall : ${product.title} • ${formatPrice(product.price, product.currency)}` : "";
@@ -383,49 +397,81 @@ export default function ProductPage() {
               </div>
             )}
 
-            {comparisons.length > 0 && (
+            {product.item_type === "product" && (
               <div className="mt-14">
                 <SectionHeading
                   title="Comparateur de prix"
-                  subtitle="Offres équivalentes chez d'autres vendeurs, classées par pertinence puis par prix."
+                  subtitle="Les offres exactes reposent sur une référence produit validée. Les prix sont comparés uniquement dans la même devise."
                   t={t}
                 />
-                <div className="flex flex-col gap-3">
-                  {comparisons.map((c) => (
-                    <Link
-                      key={c.id}
-                      to={`/produit/${c.id}`}
-                      className={cx("flex items-center gap-4 rounded-2xl border p-4 transition hover:border-indigo-400", t.cardBorder, t.cardBg)}
-                    >
-                      <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl">
-                        {c.primary_image ? (
-                          <img src={c.primary_image} alt={c.title} className="h-full w-full object-cover" />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-indigo-400 to-violet-600">
-                            <ImageOff className="h-5 w-5 text-white/80" />
-                          </div>
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className={cx("truncate text-sm font-medium", t.textPrimary)}>{c.title}</p>
-                        <p className={cx("flex flex-wrap items-center gap-x-2 text-xs", t.textMuted)}>
-                          <span className="flex items-center gap-1">
-                            <Star className="h-3 w-3 fill-amber-400 text-amber-400" /> {Number(c.seller_rating || 0).toFixed(1)}
-                          </span>
-                          <span>· {c.seller_username}</span>
-                          <span>· {c.city}</span>
-                          <span>· {c.condition_display}</span>
+                {comparisonsLoading && <p className={cx("py-3 text-sm", t.textMuted)}>Chargement des offres…</p>}
+                {comparisonsError && (
+                  <div className="flex items-center gap-3 py-3">
+                    <p role="alert" className="text-sm text-rose-600">{comparisonsError}</p>
+                    <button type="button" onClick={() => loadComparisonPage(id, 1, setComparisonState)} className="text-sm font-semibold text-indigo-600">Réessayer</button>
+                  </div>
+                )}
+
+                {exactComparison?.identity ? (
+                  <section className={cx("mt-4 rounded-2xl border p-4", t.cardBorder, t.cardBg)}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h2 className={cx("font-semibold", t.textPrimary)}>{exactComparison.identity.name}</h2>
+                        <p className={cx("mt-1 text-xs", t.textMuted)}>
+                          {exactComparison.offer_count} offre{exactComparison.offer_count === 1 ? "" : "s"} · {exactComparison.seller_count} vendeur{exactComparison.seller_count === 1 ? "" : "s"} · {exactComparison.currency}
                         </p>
                       </div>
-                      <div className="shrink-0 text-right">
-                        <p className={cx("font-mono text-sm font-semibold", t.textPrimary)}>{formatPrice(c.price, c.currency)}</p>
-                        <p className={cx("flex items-center justify-end gap-1 text-xs", t.textMuted)}>
-                          <Truck className="h-3 w-3" /> {c.estimated_delivery}
+                      {exactComparison.lowest_price != null && (
+                        <p className="font-mono text-sm font-semibold text-emerald-700">
+                          Dès {formatPrice(exactComparison.lowest_price, exactComparison.currency)}
                         </p>
+                      )}
+                    </div>
+                    {exactComparison.results?.length > 0 ? (
+                      <div className="mt-4 flex flex-col divide-y">
+                        {exactComparison.results.map((offer) => (
+                          <Link key={offer.id} to={`/produit/${offer.id}`} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+                            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-zinc-100">
+                              {offer.primary_image ? <img src={offer.primary_image} alt="" loading="lazy" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center"><ImageOff className="h-5 w-5 text-zinc-400" /></div>}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className={cx("truncate text-sm font-medium", t.textPrimary)}>{offer.title}</p>
+                              <p className={cx("text-xs", t.textMuted)}>
+                                {offer.condition_display || "État non précisé"} · {offer.seller_username}{offer.city ? ` · ${offer.city}` : ""}
+                              </p>
+                              <p className={cx("text-xs", t.textMuted)}>
+                                {offer.shipping_cost_known ? `Livraison : ${formatPrice(offer.shipping_cost, offer.currency)}` : "Frais de livraison à confirmer"}
+                              </p>
+                            </div>
+                            <p className={cx("shrink-0 font-mono text-sm font-semibold", t.textPrimary)}>{formatPrice(offer.price, offer.currency)}</p>
+                          </Link>
+                        ))}
                       </div>
-                    </Link>
-                  ))}
-                </div>
+                    ) : <p className={cx("mt-4 text-sm", t.textMuted)}>Aucune offre disponible pour cette identité produit.</p>}
+                    {(exactComparison.next || exactComparison.previous) && (
+                      <div className="mt-4 flex justify-between border-t pt-3">
+                        <button type="button" disabled={!exactComparison.previous || comparisonsLoading} onClick={() => loadComparisonPage(id, Math.max(1, Number(new URL(exactComparison.previous).searchParams.get("page") || 1)), setComparisonState)} className="text-sm font-semibold text-indigo-600 disabled:opacity-40">Précédent</button>
+                        <button type="button" disabled={!exactComparison.next || comparisonsLoading} onClick={() => loadComparisonPage(id, Number(new URL(exactComparison.next).searchParams.get("page") || 2), setComparisonState)} className="text-sm font-semibold text-indigo-600 disabled:opacity-40">Suivant</button>
+                      </div>
+                    )}
+                  </section>
+                ) : !comparisonsLoading && !comparisonsError ? (
+                  <p className={cx("mt-3 text-sm", t.textMuted)}>Aucune identité exacte n’a été validée pour cette annonce. Les offres ne sont pas regroupées sur la seule base de leur titre.</p>
+                ) : null}
+
+                {similarProducts?.length > 0 && (
+                  <section className="mt-8">
+                    <h2 className={cx("mb-3 text-base font-semibold", t.textPrimary)}>Alternatives similaires, non garanties identiques</h2>
+                    <div className="flex flex-col gap-2">
+                      {similarProducts.map((alternative) => (
+                        <Link key={alternative.id} to={`/produit/${alternative.id}`} className={cx("flex items-center justify-between gap-3 rounded-xl border p-3", t.cardBorder, t.cardBg)}>
+                          <span className={cx("min-w-0 truncate text-sm", t.textPrimary)}>{alternative.title} · {alternative.condition_display || "État non précisé"}</span>
+                          <span className={cx("shrink-0 font-mono text-sm font-semibold", t.textPrimary)}>{formatPrice(alternative.price, alternative.currency)}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  </section>
+                )}
               </div>
             )}
           </>

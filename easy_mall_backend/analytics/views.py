@@ -12,6 +12,8 @@ from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Sum
 from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import never_cache
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -21,10 +23,12 @@ from moderation.models import Dispute
 from orders.models import Order
 from payments.models import Commission
 from reviews.models import Review
+from seller_verification.models import VerificationRequest, VerificationRequestStatus
 
 User = get_user_model()
 
 
+@method_decorator(never_cache, name="dispatch")
 class GlobalStatsView(APIView):
     """Réservé au staff (`IsAdminUser` = `is_staff=True`, cohérent avec l'accès admin Django)."""
 
@@ -60,13 +64,32 @@ class GlobalStatsView(APIView):
                     "new_last_30_days": User.objects.filter(date_joined__gte=thirty_days_ago).count(),
                     "verified": User.objects.filter(is_email_verified=True, is_phone_verified=True).count(),
                 },
+                "sellers": {
+                    "individual": Product.objects.filter(
+                        seller__seller_type=User.SellerType.INDIVIDUAL
+                    ).values("seller_id").distinct().count(),
+                    "professional": Product.objects.filter(
+                        seller__seller_type=User.SellerType.PROFESSIONAL
+                    ).values("seller_id").distinct().count(),
+                },
                 "products": {
                     "total": Product.objects.count(),
                     "published": Product.objects.filter(status=Product.Status.PUBLISHED).count(),
+                    "active_listings": Product.objects.filter(
+                        status=Product.Status.PUBLISHED, is_suspended=False
+                    ).count(),
                     "pending_moderation": Product.objects.filter(
                         moderation_status=Product.ModerationStatus.PENDING
                     ).count(),
                     "sold": Product.objects.filter(status=Product.Status.SOLD).count(),
+                },
+                "verification": {
+                    "pending": VerificationRequest.objects.filter(
+                        status__in=[
+                            VerificationRequestStatus.PENDING,
+                            VerificationRequestStatus.UNDER_REVIEW,
+                        ]
+                    ).count(),
                 },
                 "orders": {
                     "total": Order.objects.count(),

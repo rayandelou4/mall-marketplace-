@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.translation import ngettext
 
-from .models import Category, Favorite, Product, ProductImage, ProductVideo, SavedSearch
+from .models import Category, Favorite, Product, ProductIdentity, ProductImage, ProductVideo, SavedSearch
 
 
 class ProductImageInline(admin.TabularInline):
@@ -24,6 +24,7 @@ class ProductAdmin(admin.ModelAdmin):
     search_fields = ["title", "description", "seller__username", "city"]
     inlines = [ProductImageInline]
     actions = ["approve_products", "reject_products"]
+    autocomplete_fields = ["comparison_identity"]
 
     @admin.action(description="Approuver les annonces sélectionnées")
     def approve_products(self, request, queryset):
@@ -40,6 +41,14 @@ class ProductAdmin(admin.ModelAdmin):
             request,
             ngettext("%d annonce rejetée.", "%d annonces rejetées.", updated) % updated,
         )
+
+
+@admin.register(ProductIdentity)
+class ProductIdentityAdmin(admin.ModelAdmin):
+    list_display = ["name", "category", "brand", "model_name", "manufacturer_reference", "variant"]
+    list_filter = ["category"]
+    search_fields = ["name", "brand", "model_name", "manufacturer_reference", "variant"]
+    readonly_fields = ["comparison_key", "created_at", "updated_at"]
 
 
 @admin.register(Category)

@@ -54,6 +54,11 @@ export function ProductCard({ product, index = 0, t, onToggleFavorite, showSelle
         <p className={cx("mt-2 font-mono text-base font-semibold", t.textPrimary)}>
           {formatPrice(product.price, product.currency)}{product.item_type === "service" && product.price_unit !== "fixed" ? ` ${product.price_unit_display?.toLowerCase()}` : ""}
         </p>
+        {product.item_type === "product" && product.comparison_identity && product.comparison_offer_count > 0 && (
+          <p className={cx("mt-1 text-xs", t.textMuted)}>
+            {product.comparison_offer_count} offre{product.comparison_offer_count > 1 ? "s" : ""} · dès {formatPrice(product.comparison_lowest_price, product.currency)}
+          </p>
+        )}
         <div className={cx("mt-2 flex items-center justify-between text-xs", t.textMuted)}>
           <span className="inline-flex items-center gap-1"><MapPin className="h-3 w-3" /> {product.city}</span>
           <span>{product.item_type === "service" ? "Prestation" : "Prix"}</span>

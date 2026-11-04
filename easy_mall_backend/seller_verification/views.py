@@ -16,6 +16,8 @@ from django.db.models import Count
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import never_cache
 from rest_framework import status, viewsets, permissions, mixins
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -73,13 +75,24 @@ class IsVerificationAdmin(permissions.BasePermission):
         if not request.user.is_authenticated or not request.user.is_staff:
             return False
         action = getattr(view, "action", "")
-        if action == "revoke":
-            permission = "seller_verification.change_sellercertification"
-        elif request.method in permissions.SAFE_METHODS:
-            permission = "seller_verification.view_verificationrequest"
-        else:
-            permission = "seller_verification.change_verificationrequest"
+        permission = getattr(view, "admin_permissions", {}).get(action)
+        if permission is None:
+            if request.method in permissions.SAFE_METHODS:
+                permission = "seller_verification.view_verificationrequest"
+            else:
+                permission = "seller_verification.change_verificationrequest"
         return request.user.has_perm(permission)
+
+
+class IsCertificationAdmin(permissions.BasePermission):
+    """Require certification-management permission for global processing."""
+
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated
+            and request.user.is_staff
+            and request.user.has_perm("seller_verification.change_sellercertification")
+        )
 
 
 class IsVerificationDocumentAdmin(permissions.BasePermission):
@@ -353,6 +366,7 @@ class VerificationRequestViewSet(
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+@method_decorator(never_cache, name="dispatch")
 class VerificationDocumentDownloadView(APIView):
     """
     Vue pour télécharger un document de vérification.
@@ -390,6 +404,7 @@ class VerificationDocumentDownloadView(APIView):
         return response
 
 
+@method_decorator(never_cache, name="dispatch")
 class AdminVerificationRequestViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet admin pour examiner les demandes de vérification.
@@ -642,6 +657,7 @@ class AdminVerificationRequestViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.data)
 
 
+@method_decorator(never_cache, name="dispatch")
 class AdminCertificationViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet admin pour gérer les certifications.
@@ -652,6 +668,11 @@ class AdminCertificationViewSet(viewsets.ReadOnlyModelViewSet):
     """
 
     permission_classes = [IsVerificationAdmin]
+    admin_permissions = {
+        "list": "seller_verification.view_sellercertification",
+        "retrieve": "seller_verification.view_sellercertification",
+        "revoke": "seller_verification.change_sellercertification",
+    }
     serializer_class = SellerCertificationSerializer
 
     def get_queryset(self):
@@ -706,10 +727,14 @@ class AdminCertificationViewSet(viewsets.ReadOnlyModelViewSet):
                 SellerCertificationSerializer(certification).data,
                 status=status.HTTP_200_OK,
             )
-        except Exception as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            return Response(
+                {"detail": "Impossible de révoquer cette certification."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
+@method_decorator(never_cache, name="dispatch")
 class AdminVerificationDashboardView(APIView):
     """
     Tableau de bord admin pour les vérifications.
@@ -767,6 +792,7 @@ class AdminVerificationDashboardView(APIView):
         )
 
 
+@method_decorator(never_cache, name="dispatch")
 class ProcessAutomaticCertificationsView(APIView):
     """
     Vue pour traiter les certifications automatiques.
@@ -775,7 +801,7 @@ class ProcessAutomaticCertificationsView(APIView):
     (Devrait être appelée par une tâche périodique)
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsCertificationAdmin]
 
     def post(self, request, format=None):
         """

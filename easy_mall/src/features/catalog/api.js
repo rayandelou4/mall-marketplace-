@@ -22,7 +22,10 @@ export function fetchProductsPaginated(params = {}) {
 
 export const fetchProduct = (id) => apiRequest(`/catalog/products/${id}/`);
 
-export const fetchComparisons = (id) => apiRequest(`/catalog/products/${id}/comparisons/`);
+export const fetchComparisons = (id, params = {}) => {
+  const query = buildQuery(params);
+  return apiRequest(`/catalog/products/${id}/comparisons/${query ? `?${query}` : ""}`);
+};
 
 export const toggleFavorite = (id) => apiRequest(`/catalog/products/${id}/toggle_favorite/`, { method: "POST" });
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { Users, Package, ShoppingBag, AlertTriangle, Star, TrendingUp } from "lucide-react";
+import { Users, Package, ShoppingBag, AlertTriangle, Star, TrendingUp, Store, ShieldCheck } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { SectionHeading, LoadingBlock, ErrorBlock } from "../components/ui/StatusBlocks";
@@ -77,8 +77,12 @@ export default function AdminStatsPage() {
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               <StatCard icon={Users} label="Utilisateurs" value={data.users.total} t={t} />
               <StatCard icon={Users} label="Nouveaux (30j)" value={data.users.new_last_30_days} t={t} />
+              <StatCard icon={Store} label="Vendeurs particuliers" value={data.sellers.individual} t={t} />
+              <StatCard icon={Store} label="Commerçants professionnels" value={data.sellers.professional} t={t} />
               <StatCard icon={Package} label="Annonces publiées" value={data.products.published} t={t} />
+              <StatCard icon={Package} label="Annonces actives" value={data.products.active_listings} t={t} />
               <StatCard icon={AlertTriangle} label="En attente de modération" value={data.products.pending_moderation} t={t} />
+              <StatCard icon={ShieldCheck} label="Vérifications en attente" value={data.verification.pending} t={t} />
               <StatCard icon={ShoppingBag} label="Commandes totales" value={data.orders.total} t={t} />
               <StatCard icon={AlertTriangle} label="Litiges ouverts" value={data.moderation.open_disputes} t={t} />
               <StatCard icon={Star} label="Avis publiés" value={data.reviews.total} t={t} />

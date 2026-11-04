@@ -5,6 +5,8 @@ Gère : les catégories (arborescence), les produits publiés par les
 utilisateurs, leurs images/vidéo, les favoris et les recherches sauvegardées.
 """
 
+import hashlib
+import unicodedata
 import uuid
 
 from django.conf import settings
@@ -50,6 +52,79 @@ class Category(models.Model):
         return self.parent_id is not None
 
 
+def _normalize_identity_part(value, compact=False):
+    normalized = unicodedata.normalize("NFKD", value or "").casefold()
+    characters = []
+    for character in normalized:
+        if unicodedata.category(character) == "Mn":
+            continue
+        if unicodedata.category(character)[0] in {"L", "N"}:
+            characters.append(character)
+        elif not compact and characters and characters[-1] != " ":
+            characters.append(" ")
+    return "".join(characters).strip()
+
+
+class ProductIdentity(models.Model):
+    """Référentiel administré des produits communs à plusieurs annonces."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    category = models.ForeignKey(
+        Category, on_delete=models.PROTECT, related_name="product_identities"
+    )
+    name = models.CharField(max_length=180)
+    brand = models.CharField(max_length=100, blank=True)
+    model_name = models.CharField(max_length=150, blank=True)
+    manufacturer_reference = models.CharField(max_length=100, blank=True)
+    variant = models.CharField(max_length=150, blank=True)
+    comparison_key = models.CharField(max_length=64, unique=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "product_identities"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        has_reference = bool(_normalize_identity_part(self.manufacturer_reference, compact=True))
+        has_structured_variant = all(
+            _normalize_identity_part(value)
+            for value in (self.brand, self.model_name, self.variant)
+        )
+        if not has_reference and not has_structured_variant:
+            raise ValidationError(
+                "Une référence fabricant ou une marque, un modèle et une variante sont requis."
+            )
+
+    def save(self, *args, **kwargs):
+        reference = _normalize_identity_part(self.manufacturer_reference, compact=True)
+        if reference:
+            key_parts = (
+                str(self.category_id),
+                "reference",
+                _normalize_identity_part(self.brand),
+                reference,
+            )
+        else:
+            key_parts = (
+                str(self.category_id),
+                "attributes",
+                _normalize_identity_part(self.brand),
+                _normalize_identity_part(self.model_name),
+                _normalize_identity_part(self.variant),
+            )
+        self.comparison_key = hashlib.sha256("|".join(key_parts).encode()).hexdigest()
+        self.full_clean()
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = set(kwargs["update_fields"]) | {"comparison_key"}
+        super().save(*args, **kwargs)
+
+
 class Product(models.Model):
     """Annonce publiée par un utilisateur (le "vendeur" pour cette annonce)."""
 
@@ -87,6 +162,13 @@ class Product(models.Model):
     )
     category = models.ForeignKey(
         Category, on_delete=models.PROTECT, related_name="products"
+    )
+    comparison_identity = models.ForeignKey(
+        ProductIdentity,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="offers",
     )
 
     item_type = models.CharField(max_length=10, choices=ItemType.choices, default=ItemType.PRODUCT)
@@ -146,10 +228,25 @@ class Product(models.Model):
             models.Index(fields=["category", "status", "moderation_status"]),
             models.Index(fields=["city", "country"]),
             models.Index(fields=["price"]),
+            models.Index(
+                fields=["comparison_identity", "currency", "status", "moderation_status"],
+                name="product_cmp_group_idx",
+            ),
         ]
 
     def __str__(self):
         return self.title
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if (
+            self.comparison_identity_id
+            and self.comparison_identity.category_id != self.category_id
+        ):
+            raise ValidationError(
+                {"comparison_identity": "L'identité doit appartenir à la catégorie de l'annonce."}
+            )
 
     @property
     def is_available(self):

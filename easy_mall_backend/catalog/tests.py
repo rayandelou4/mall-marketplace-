@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
-from .models import Category, Product, SellerFavorite
+from .models import Category, Product, ProductIdentity, SellerFavorite
 
 
 class ProductVisibilityTests(APITestCase):
@@ -259,3 +259,128 @@ class SellerFavoriteTests(APITestCase):
         response = self.client.post(self.url, {"seller": str(self.seller.pk)}, format="json")
 
         self.assertEqual(response.status_code, 400)
+
+
+class ProductComparisonTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.sellers = [
+            User.objects.create_user(
+                email=f"compare-{index}@example.com",
+                phone_number=f"+2439000010{index}",
+                username=f"compare-{index}",
+                password="password123",
+            )
+            for index in range(4)
+        ]
+        self.category = Category.objects.create(name="Téléphones")
+        self.identity = ProductIdentity.objects.create(
+            category=self.category,
+            name="Samsung Galaxy A15 128 Go",
+            brand="Samsung",
+            model_name="Galaxy A15",
+            variant="128 Go",
+        )
+        self.url = reverse("catalog:product-list")
+
+    def create_product(self, seller, **overrides):
+        values = {
+            "seller": seller,
+            "category": self.category,
+            "title": "Samsung Galaxy A15 128 Go",
+            "description": "Téléphone de test",
+            "price": "200.00",
+            "currency": "USD",
+            "condition": Product.Condition.BON_ETAT,
+            "city": "Kinshasa",
+            "country": "RDC",
+            "stock_quantity": 1,
+            "status": Product.Status.PUBLISHED,
+            "moderation_status": Product.ModerationStatus.APPROVED,
+            "comparison_identity": self.identity,
+        }
+        values.update(overrides)
+        return Product.objects.create(**values)
+
+    def test_exact_offers_use_identity_and_exclude_unavailable_listings(self):
+        reference = self.create_product(self.sellers[0], price="300.00")
+        cheapest = self.create_product(self.sellers[1], price="180.00")
+        self.create_product(self.sellers[2], price="150.00", currency="CDF")
+        self.create_product(self.sellers[2], price="5.00", is_suspended=True)
+        self.create_product(self.sellers[3], price="10.00", stock_quantity=0)
+
+        response = self.client.get(
+            reverse("catalog:product-comparisons", kwargs={"pk": reference.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        exact = response.data["exact"]
+        self.assertEqual(exact["offer_count"], 2)
+        self.assertEqual(exact["seller_count"], 2)
+        self.assertEqual(exact["lowest_price"], "180.00")
+        self.assertEqual(exact["currency"], "USD")
+        self.assertEqual(
+            {offer["id"] for offer in exact["results"]},
+            {str(reference.pk), str(cheapest.pk)},
+        )
+        self.assertFalse(exact["results"][0]["shipping_cost_known"])
+
+    def test_similar_titles_are_not_reported_as_exact_matches(self):
+        reference = self.create_product(
+            self.sellers[0],
+            title="Samsung Galaxy S21 128GB",
+            comparison_identity=None,
+        )
+        self.create_product(
+            self.sellers[1],
+            title="Samsung Galaxy S21 Ultra 128GB",
+            comparison_identity=None,
+        )
+
+        response = self.client.get(
+            reverse("catalog:product-comparisons", kwargs={"pk": reference.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["exact"]["identity"])
+        self.assertEqual(response.data["exact"]["offer_count"], 0)
+        self.assertEqual(len(response.data["similar"]), 1)
+
+    def test_different_variants_have_different_identity_keys(self):
+        other_variant = ProductIdentity.objects.create(
+            category=self.category,
+            name="Samsung Galaxy A15 256 Go",
+            brand="Samsung",
+            model_name="Galaxy A15",
+            variant="256 Go",
+        )
+        reference = self.create_product(self.sellers[0])
+        alternative = self.create_product(
+            self.sellers[1],
+            comparison_identity=other_variant,
+            title="Samsung Galaxy A15 256 Go",
+        )
+
+        response = self.client.get(
+            reverse("catalog:product-comparisons", kwargs={"pk": reference.pk})
+        )
+
+        self.assertEqual(response.data["exact"]["offer_count"], 1)
+        self.assertNotIn(
+            str(alternative.pk),
+            {offer["id"] for offer in response.data["exact"]["results"]},
+        )
+
+    def test_catalog_lists_only_same_currency_exact_group_summary(self):
+        first = self.create_product(self.sellers[0], price="250.00")
+        self.create_product(self.sellers[1], price="190.00")
+        self.create_product(self.sellers[2], price="100.00", currency="CDF")
+
+        response = self.client.get(self.url, {"search": "Samsung Galaxy A15"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 2)
+        result = next(item for item in response.data["results"] if item["id"] == str(first.pk))
+        self.assertEqual(result["comparison_offer_count"], 2)
+        self.assertEqual(result["comparison_seller_count"], 2)
+        self.assertEqual(result["comparison_lowest_price"], "190.00")

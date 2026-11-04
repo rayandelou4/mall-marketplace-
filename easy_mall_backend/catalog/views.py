@@ -7,9 +7,11 @@ prix, date d'ajout — cahier des charges §"Catalogue").
 """
 
 import re
+import unicodedata
 
 import django_filters
-from django.db.models import Case, F, IntegerField, Q, Value, When
+from django.db.models import Case, Count, DecimalField, F, IntegerField, Min, OuterRef, Q, Subquery, Value, When, Window
+from django.db.models.functions import RowNumber
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, permissions, viewsets
 from rest_framework.decorators import action
@@ -58,7 +60,13 @@ _STOPWORDS = {
 
 def _significant_words(title):
     """Mots de 3+ lettres/chiffres, hors mots vides — base du rapprochement."""
-    words = re.findall(r"[a-zàâäéèêëïîôöùûüç0-9]+", title.lower())
+    normalized = unicodedata.normalize("NFKD", title).casefold()
+    normalized = "".join(
+        character
+        for character in normalized
+        if unicodedata.category(character) != "Mn"
+    )
+    words = re.findall(r"[a-z0-9]+", normalized)
     return {w for w in words if len(w) >= 3 and w not in _STOPWORDS}
 
 
@@ -304,11 +312,121 @@ class ProductViewSet(viewsets.ModelViewSet):
     ordering_fields = ["price", "created_at"]
     ordering = ["-created_at"]
 
+    def _active_comparison_offers(self, apply_catalog_filters=False):
+        queryset = Product.objects.filter(
+            item_type=Product.ItemType.PRODUCT,
+            status=Product.Status.PUBLISHED,
+            moderation_status=Product.ModerationStatus.APPROVED,
+            is_suspended=False,
+            stock_quantity__gt=0,
+            price__gte=0,
+            seller__is_active=True,
+        ).exclude(currency="")
+        if not apply_catalog_filters:
+            return queryset
+        filterset = ProductFilter(
+            data=self.request.query_params,
+            queryset=queryset,
+            request=self.request,
+        )
+        if filterset.is_valid():
+            queryset = filterset.qs
+        return filters.SearchFilter().filter_queryset(self.request, queryset, self)
+
+    def _annotate_comparison_summary(self, queryset):
+        grouped_offers = (
+            self._active_comparison_offers(apply_catalog_filters=True)
+            .filter(
+                comparison_identity_id=OuterRef("comparison_identity_id"),
+                category_id=OuterRef("category_id"),
+                currency=OuterRef("currency"),
+                condition=OuterRef("condition"),
+                comparison_identity__category_id=OuterRef("category_id"),
+            )
+            .order_by()
+            .values("comparison_identity_id")
+            .annotate(
+                offer_count=Count("pk"),
+                seller_count=Count("seller_id", distinct=True),
+                lowest_price=Min("price"),
+            )
+        )
+        return queryset.annotate(
+            comparison_rank=Window(
+                expression=RowNumber(),
+                partition_by=[
+                    F("comparison_identity_id"),
+                    F("currency"),
+                    F("condition"),
+                    F("status"),
+                    F("moderation_status"),
+                    F("is_suspended"),
+                ],
+                order_by=[
+                    Case(
+                        When(stock_quantity__gt=0, then=Value(0)),
+                        default=Value(1),
+                        output_field=IntegerField(),
+                    ).asc(),
+                    F("price").asc(),
+                    F("created_at").desc(),
+                ],
+            ),
+            comparison_offer_count=Case(
+                When(
+                    comparison_identity__isnull=False,
+                    comparison_identity__category_id=F("category_id"),
+                    then=Subquery(grouped_offers.values("offer_count")[:1]),
+                ),
+                default=Value(None),
+                output_field=IntegerField(),
+            ),
+            comparison_seller_count=Case(
+                When(
+                    comparison_identity__isnull=False,
+                    comparison_identity__category_id=F("category_id"),
+                    then=Subquery(grouped_offers.values("seller_count")[:1]),
+                ),
+                default=Value(None),
+                output_field=IntegerField(),
+            ),
+            comparison_lowest_price=Case(
+                When(
+                    comparison_identity__isnull=False,
+                    comparison_identity__category_id=F("category_id"),
+                    then=Subquery(grouped_offers.values("lowest_price")[:1]),
+                ),
+                default=Value(None),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        queryset = queryset.filter(
+            Q(comparison_identity__isnull=True) | Q(comparison_rank=1)
+        )
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(
+            page if page is not None else queryset, many=True
+        )
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
     def get_queryset(self):
         queryset = Product.objects.select_related(
-            "seller", "category"
+            "seller",
+            "seller__public_location__country",
+            "seller__public_location__administrative_area",
+            "seller__public_location__locality",
+            "seller__location_preference",
+            "category",
+            "comparison_identity",
         ).prefetch_related("images")
-        if self.action in ("list", "retrieve"):
+        if self.action == "list":
+            queryset = self._annotate_comparison_summary(queryset)
+        if self.action in ("list", "retrieve", "comparisons"):
             user = self.request.user
             public_products = Q(
                 is_suspended=False,
@@ -387,45 +505,95 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def comparisons(self, request, pk=None):
-        """
-        Le "comparateur de prix" du cahier des charges : offres équivalentes
-        chez d'autres vendeurs (même catégorie + chevauchement de mots
-        significatifs du titre). Le rapprochement se fait en Python plutôt
-        qu'avec une extension de recherche spécifique à Postgres (ex.
-        pg_trgm), pour fonctionner identiquement avec SQLite en dev.
-
-        Note de perf : charge les candidats de la catégorie en mémoire pour
-        les noter un par un — largement suffisant à ce volume, mais à
-        reconsidérer (recherche plein texte côté DB) si le catalogue devient
-        très grand.
-        """
+        """Retourne les offres exactes validées et des alternatives distinctes."""
         product = self.get_object()
         reference_words = _significant_words(product.title)
-
-        candidates = (
-            Product.objects.filter(
-                category=product.category,
-                status=Product.Status.PUBLISHED,
-                moderation_status=Product.ModerationStatus.APPROVED,
+        exact_offers = self._active_comparison_offers().none()
+        identity = product.comparison_identity
+        summary = {"offer_count": 0, "seller_count": 0, "lowest_price": None}
+        if identity and identity.category_id == product.category_id:
+            exact_offers = (
+                self._active_comparison_offers(apply_catalog_filters=True)
+                .filter(
+                    comparison_identity=identity,
+                    category=product.category,
+                    currency=product.currency,
+                    condition=product.condition,
+                )
+                .select_related("seller", "comparison_identity")
+                .prefetch_related("images")
+                .order_by("price", "-created_at")
             )
-            .exclude(seller=product.seller)
-            .exclude(pk=product.pk)
-            .select_related("seller")
-            .prefetch_related("images")
-        )
+            summary_values = exact_offers.aggregate(
+                offer_count=Count("pk"),
+                seller_count=Count("seller_id", distinct=True),
+                lowest_price=Min("price"),
+            )
+            summary.update(summary_values)
 
-        scored = []
-        for candidate in candidates:
-            overlap = len(reference_words & _significant_words(candidate.title))
-            if overlap > 0 or not reference_words:
-                scored.append((overlap, candidate))
-        scored.sort(key=lambda pair: (-pair[0], pair[1].price))
+        page = self.paginate_queryset(exact_offers)
+        page_data = ProductComparisonSerializer(
+            page, many=True, context=self.get_serializer_context()
+        ).data
+        paginated = self.get_paginated_response(page_data).data
+        exact = {
+            "identity": (
+                {
+                    "id": str(identity.pk),
+                    "name": identity.name,
+                    "brand": identity.brand,
+                    "model_name": identity.model_name,
+                    "manufacturer_reference": identity.manufacturer_reference,
+                    "variant": identity.variant,
+                }
+                if identity and identity.category_id == product.category_id
+                else None
+            ),
+            "currency": product.currency,
+            "offer_count": summary["offer_count"],
+            "seller_count": summary["seller_count"],
+            "lowest_price": (
+                str(summary["lowest_price"])
+                if summary["lowest_price"] is not None
+                else None
+            ),
+            "next": paginated["next"],
+            "previous": paginated["previous"],
+            "results": paginated["results"],
+        }
 
-        results = [candidate for _, candidate in scored[:10]]
-        serializer = ProductComparisonSerializer(
-            results, many=True, context={"reference_city": product.city}
-        )
-        return Response(serializer.data)
+        similar = []
+        if reference_words and request.query_params.get("page", "1") == "1":
+            title_match = Q()
+            for word in reference_words:
+                title_match |= Q(title__icontains=word)
+            candidates = (
+                self._active_comparison_offers()
+                .filter(category=product.category, currency=product.currency)
+                .filter(title_match)
+                .exclude(pk=product.pk)
+                .exclude(seller=product.seller)
+                .select_related("seller", "category", "comparison_identity")
+                .prefetch_related("images")
+                .order_by("-created_at")[:100]
+            )
+            if identity:
+                candidates = candidates.exclude(comparison_identity=identity)
+            ranked = []
+            for candidate in candidates:
+                candidate_words = _significant_words(candidate.title)
+                overlap = len(reference_words & candidate_words)
+                union_size = len(reference_words | candidate_words)
+                if overlap >= 2 and union_size and overlap / union_size >= 0.35:
+                    ranked.append((overlap / union_size, candidate))
+            ranked.sort(key=lambda item: (-item[0], item[1].price))
+            similar = ProductListSerializer(
+                [candidate for _, candidate in ranked[:5]],
+                many=True,
+                context=self.get_serializer_context(),
+            ).data
+
+        return Response({"exact": exact, "similar": similar})
 
 
 class FavoriteViewSet(viewsets.ModelViewSet):

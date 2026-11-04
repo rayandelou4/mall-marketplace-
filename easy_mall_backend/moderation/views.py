@@ -3,6 +3,8 @@ Vues de l'app `moderation`.
 """
 
 from django.db import transaction
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import never_cache
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -19,13 +21,37 @@ from .serializers import (
 )
 
 
+class IsModerationAdmin(permissions.BasePermission):
+    """Require explicit Django model permissions for global moderation data."""
+
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+
+        action = getattr(view, "action", None)
+        if action in {"list", "retrieve"} and not request.user.is_staff:
+            return True
+
+        required_permission = getattr(view, "admin_permissions", {}).get(action)
+        if required_permission:
+            return request.user.is_staff and request.user.has_perm(required_permission)
+
+        return action == "create"
+
+
+@method_decorator(never_cache, name="dispatch")
 class ProductReportViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsModerationAdmin]
+    admin_permissions = {
+        "list": "moderation.view_productreport",
+        "retrieve": "moderation.view_productreport",
+        "decide": "moderation.change_productreport",
+    }
 
     def get_queryset(self):
         user = self.request.user
@@ -109,10 +135,15 @@ class ProductReportViewSet(
         return Response(ProductReportSerializer(report).data)
 
 
+@method_decorator(never_cache, name="dispatch")
 class DisputeViewSet(
     mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin, viewsets.GenericViewSet
 ):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsModerationAdmin]
+    admin_permissions = {
+        "list": "moderation.view_dispute",
+        "retrieve": "moderation.view_dispute",
+    }
 
     def get_queryset(self):
         user = self.request.user

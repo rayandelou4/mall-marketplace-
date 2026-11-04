@@ -10,6 +10,7 @@ from .models import (
     Favorite,
     Product,
     ProductImage,
+    ProductIdentity,
     ProductVideo,
     SavedSearch,
     SellerFavorite,
@@ -66,13 +67,14 @@ class ProductVideoSerializer(serializers.ModelSerializer):
         fields = ["video_url"]
 
 
+class ProductIdentitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductIdentity
+        fields = ["id", "name", "brand", "model_name", "manufacturer_reference", "variant"]
+
+
 class ProductComparisonSerializer(serializers.ModelSerializer):
-    """
-    Une ligne du comparateur de prix : une offre équivalente chez un autre
-    vendeur. Le délai de livraison est une estimation simple (même ville que
-    l'annonce de référence = plus rapide) — pas de vraie logistique/distance,
-    volontairement simplifié.
-    """
+    """Offre d'une identité produit validée, avec livraison non extrapolée."""
 
     primary_image = serializers.SerializerMethodField()
     condition_display = serializers.CharField(
@@ -83,8 +85,9 @@ class ProductComparisonSerializer(serializers.ModelSerializer):
     seller_rating = serializers.DecimalField(
         source="seller.average_rating", max_digits=3, decimal_places=2, read_only=True
     )
-    estimated_delivery = serializers.SerializerMethodField()
     city = serializers.SerializerMethodField()
+    shipping_cost_known = serializers.SerializerMethodField()
+    is_available = serializers.ReadOnlyField()
 
     class Meta:
         model = Product
@@ -98,22 +101,22 @@ class ProductComparisonSerializer(serializers.ModelSerializer):
             "seller_username",
             "seller_rating",
             "shipping_cost",
-            "estimated_delivery",
+            "shipping_cost_known",
+            "is_available",
             "primary_image",
         ]
 
     def get_primary_image(self, obj):
-        image = obj.images.filter(is_primary=True).first() or obj.images.first()
+        images = list(obj.images.all())
+        image = next((item for item in images if item.is_primary), None)
+        image = image or (images[0] if images else None)
         return image.image_url if image else None
 
     def get_city(self, obj):
         return _public_seller_city(obj)
 
-    def get_estimated_delivery(self, obj):
-        reference_city = (self.context.get("reference_city") or "").strip().lower()
-        if reference_city and obj.city.strip().lower() == reference_city:
-            return "1-2 jours"
-        return "3-5 jours"
+    def get_shipping_cost_known(self, obj):
+        return obj.shipping_cost > 0
 
 
 class ProductListSerializer(serializers.ModelSerializer):
@@ -135,6 +138,12 @@ class ProductListSerializer(serializers.ModelSerializer):
     )
     seller_location_display = serializers.SerializerMethodField()
     city = serializers.SerializerMethodField()
+    comparison_identity = ProductIdentitySerializer(read_only=True)
+    comparison_offer_count = serializers.IntegerField(read_only=True, allow_null=True, default=None)
+    comparison_seller_count = serializers.IntegerField(read_only=True, allow_null=True, default=None)
+    comparison_lowest_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True, allow_null=True, default=None
+    )
 
     class Meta:
         model = Product
@@ -156,13 +165,19 @@ class ProductListSerializer(serializers.ModelSerializer):
             "seller_username",
             "seller_avatar_url",
             "seller_rating",
+            "comparison_identity",
+            "comparison_offer_count",
+            "comparison_seller_count",
+            "comparison_lowest_price",
             "status",
             "moderation_status",
             "created_at",
         ]
 
     def get_primary_image(self, obj):
-        image = obj.images.filter(is_primary=True).first() or obj.images.first()
+        images = list(obj.images.all())
+        image = next((item for item in images if item.is_primary), None)
+        image = image or (images[0] if images else None)
         return image.image_url if image else None
 
     def get_seller_location_display(self, obj):
@@ -197,6 +212,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     seller_location_display = serializers.SerializerMethodField()
     city = serializers.SerializerMethodField()
     country = serializers.SerializerMethodField()
+    comparison_identity = ProductIdentitySerializer(read_only=True)
 
     class Meta:
         model = Product
@@ -223,6 +239,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             "favorites_count",
             "category",
             "category_name",
+            "comparison_identity",
             "images",
             "video",
             "seller_username",

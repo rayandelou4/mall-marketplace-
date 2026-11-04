@@ -169,6 +169,22 @@ class EarlySellerVerificationTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_certification_admin_endpoints_require_certification_permissions(self):
+        self.other.is_staff = True
+        self.other.save(update_fields=["is_staff"])
+        client = APIClient()
+        client.force_authenticate(self.other)
+
+        response = client.post(reverse("process-automatic-certifications"))
+        self.assertEqual(response.status_code, 403)
+
+        self.other.user_permissions.add(
+            Permission.objects.get(codename="change_sellercertification")
+        )
+        client.force_authenticate(User.objects.get(pk=self.other.pk))
+        response = client.post(reverse("process-automatic-certifications"))
+        self.assertEqual(response.status_code, 200, response.content)
+
     def test_other_user_cannot_fetch_request_or_documents(self):
         request = self.create_request()
         client = APIClient()
