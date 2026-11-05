@@ -50,6 +50,9 @@ class SellerPublicLocationSerializer(serializers.ModelSerializer):
     administrative_area_id = serializers.UUIDField(
         write_only=True, required=False, allow_null=True
     )
+    administrative_area_name = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=150
+    )
     locality_id = serializers.UUIDField(
         write_only=True, required=False, allow_null=True
     )
@@ -63,6 +66,7 @@ class SellerPublicLocationSerializer(serializers.ModelSerializer):
             "country_id",
             "administrative_area",
             "administrative_area_id",
+            "administrative_area_name",
             "locality",
             "locality_id",
             "precision",
@@ -159,6 +163,31 @@ class SellerPublicLocationSerializer(serializers.ModelSerializer):
             )
         return attrs
 
+    def _save_with_area_name(self, attrs, instance=None):
+        area_name = attrs.pop("administrative_area_name", "").strip()
+        area_id = attrs.get(
+            "administrative_area_id",
+            getattr(instance, "administrative_area_id", None),
+        )
+        country_id = attrs.get("country_id", getattr(instance, "country_id", None))
+        if area_name and not area_id:
+            area, _ = AdministrativeArea.objects.get_or_create(
+                country_id=country_id,
+                parent=None,
+                level=AdministrativeArea.LEVEL_PROVINCE,
+                name=area_name,
+            )
+            attrs["administrative_area_id"] = area.pk
+        return attrs
+
+    def create(self, validated_data):
+        return super().create(self._save_with_area_name(validated_data))
+
+    def update(self, instance, validated_data):
+        return super().update(
+            instance, self._save_with_area_name(validated_data, instance)
+        )
+
 
 class PrivateAddressSerializer(serializers.ModelSerializer):
     country = CountrySerializer(read_only=True)
@@ -171,6 +200,11 @@ class PrivateAddressSerializer(serializers.ModelSerializer):
     locality_id = serializers.UUIDField(
         write_only=True, required=False, allow_null=True
     )
+    country_code = serializers.CharField(write_only=True, required=False, max_length=3)
+    country_name = serializers.CharField(write_only=True, required=False, max_length=150)
+    administrative_area_name = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=150
+    )
 
     class Meta:
         model = PrivateAddress
@@ -179,8 +213,11 @@ class PrivateAddressSerializer(serializers.ModelSerializer):
             "label",
             "country",
             "country_id",
+            "country_code",
+            "country_name",
             "administrative_area",
             "administrative_area_id",
+            "administrative_area_name",
             "locality",
             "locality_id",
             "street_address",
@@ -193,6 +230,7 @@ class PrivateAddressSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         country_id = attrs.get("country_id", getattr(self.instance, "country_id", None))
+        country_code = attrs.get("country_code", "").strip().upper()
         admin_id = attrs.get(
             "administrative_area_id",
             getattr(self.instance, "administrative_area_id", None),
@@ -200,12 +238,18 @@ class PrivateAddressSerializer(serializers.ModelSerializer):
         locality_id = attrs.get(
             "locality_id", getattr(self.instance, "locality_id", None)
         )
-        if not country_id:
+        country = (
+            Country.objects.filter(pk=country_id, is_active=True).first()
+            if country_id
+            else None
+        )
+        if not country and country_code:
+            country = Country.objects.filter(code=country_code, is_active=True).first()
+        if not country and not (country_code and attrs.get("country_name", "").strip()):
             raise serializers.ValidationError(
                 {"country_id": "Le pays est obligatoire."}
             )
-        country = Country.objects.filter(pk=country_id, is_active=True).first()
-        if not country:
+        if country_id and not country:
             raise serializers.ValidationError(
                 {"country_id": "Pays introuvable ou inactif."}
             )
@@ -227,11 +271,11 @@ class PrivateAddressSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"locality_id": "Localité introuvable ou inactive."}
             )
-        if administrative_area and administrative_area.country_id != country.pk:
+        if administrative_area and country and administrative_area.country_id != country.pk:
             raise serializers.ValidationError(
                 {"administrative_area_id": "La subdivision ne correspond pas au pays."}
             )
-        if locality and locality.country_id != country.pk:
+        if locality and country and locality.country_id != country.pk:
             raise serializers.ValidationError(
                 {"locality_id": "La localité ne correspond pas au pays."}
             )
@@ -247,7 +291,37 @@ class PrivateAddressSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context["request"]
-        instance = PrivateAddress(user=request.user, **validated_data)
+        country_id = validated_data.pop("country_id", None)
+        country_code = validated_data.pop("country_code", "").strip().upper()
+        country_name = validated_data.pop("country_name", "").strip()
+        country = Country.objects.filter(pk=country_id).first() if country_id else None
+        if country is None:
+            country, _ = Country.objects.get_or_create(
+                code=country_code,
+                defaults={"name": country_name},
+            )
+
+        area_id = validated_data.pop("administrative_area_id", None)
+        area_name = validated_data.pop("administrative_area_name", "").strip()
+        administrative_area = (
+            AdministrativeArea.objects.filter(pk=area_id).first() if area_id else None
+        )
+        if administrative_area is None and area_name:
+            administrative_area, _ = AdministrativeArea.objects.get_or_create(
+                country=country,
+                parent=None,
+                level=AdministrativeArea.LEVEL_PROVINCE,
+                name=area_name,
+            )
+
+        locality_id = validated_data.pop("locality_id", None)
+        instance = PrivateAddress(
+            user=request.user,
+            country=country,
+            administrative_area=administrative_area,
+            locality_id=locality_id,
+            **validated_data,
+        )
         instance.save()
         return instance
 

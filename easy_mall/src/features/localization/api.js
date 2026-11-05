@@ -5,6 +5,12 @@ const ROOT = "/localization";
 export const fetchCountries = () =>
   apiRequest(`${ROOT}/countries/`).then(unwrap);
 
+export const resolveCountry = (code, name) =>
+  apiRequest(`${ROOT}/countries/resolve/`, {
+    method: "POST",
+    body: { code, name },
+  });
+
 export const fetchAreas = (params = {}) => {
   const query = new URLSearchParams(
     Object.entries(params).filter(([, value]) => value != null && value !== "")

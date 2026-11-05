@@ -274,7 +274,15 @@ class ProductFilter(django_filters.FilterSet):
 
 
 class ProductOrderingFilter(filters.OrderingFilter):
-    allowed_orderings = {"price", "-price", "created_at", "-created_at", "relevance"}
+    allowed_orderings = {
+        "price",
+        "-price",
+        "created_at",
+        "-created_at",
+        "views_count",
+        "-views_count",
+        "relevance",
+    }
 
     def filter_queryset(self, request, queryset, view):
         ordering = request.query_params.get(self.ordering_param)
@@ -309,7 +317,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, ProductOrderingFilter]
     filterset_class = ProductFilter
     search_fields = ["title", "description", "category__name"]
-    ordering_fields = ["price", "created_at"]
+    ordering_fields = ["price", "created_at", "views_count"]
     ordering = ["-created_at"]
 
     def _active_comparison_offers(self, apply_catalog_filters=False):

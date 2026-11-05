@@ -182,6 +182,26 @@ class LocalizationBackendTests(TestCase):
             PrivateAddress.objects.filter(user=self.buyer, is_default=True).count(), 1
         )
 
+    def test_buyer_can_save_address_in_country_and_region_not_preloaded(self):
+        client = APIClient()
+        client.force_authenticate(user=self.buyer)
+
+        response = client.post(
+            "/api/v1/localization/addresses/",
+            {
+                "country_code": "NG",
+                "country_name": "Nigeria",
+                "administrative_area_name": "Lagos",
+                "street_address": "Victoria Island",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["country"]["code"], "NG")
+        self.assertEqual(response.data["country"]["name"], "Nigeria")
+        self.assertEqual(response.data["administrative_area"]["name"], "Lagos")
+
     def test_delivery_options_are_created_and_toggled_by_owner(self):
         client = APIClient()
         client.force_authenticate(user=self.seller)
@@ -237,6 +257,27 @@ class LocalizationBackendTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             [area["id"] for area in response.data["results"]], [str(self.city.pk)]
+        )
+
+    def test_authenticated_user_can_resolve_country_on_demand(self):
+        client = APIClient()
+        client.force_authenticate(user=self.buyer)
+
+        response = client.post(
+            "/api/v1/localization/countries/resolve/",
+            {"code": "NG", "name": "Nigeria"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["code"], "NG")
+        self.assertEqual(
+            client.post(
+                "/api/v1/localization/countries/resolve/",
+                {"code": "NG", "name": "Nigeria"},
+                format="json",
+            ).status_code,
+            200,
         )
 
     def test_seller_can_activate_and_disable_delivery_option(self):

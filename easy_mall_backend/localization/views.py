@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -31,6 +32,31 @@ class CountryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Country.objects.filter(is_active=True)
     serializer_class = CountrySerializer
     permission_classes = [permissions.AllowAny]
+
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+    def resolve(self, request):
+        code = str(request.data.get("code", "")).strip().upper()
+        name = str(request.data.get("name", "")).strip()
+        if not (code.isascii() and code.isalpha() and len(code) in {2, 3} and name):
+            return Response(
+                {"detail": "Un code ISO et un nom de pays valides sont obligatoires."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        stored_code = "COD" if code == "CD" and Country.objects.filter(code="COD").exists() else code
+        country, created = Country.objects.get_or_create(
+            code=stored_code,
+            defaults={"name": name},
+        )
+        if not country.is_active:
+            return Response(
+                {"detail": "Ce pays n'est pas disponible."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            self.get_serializer(country).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
 
 class AdministrativeAreaViewSet(viewsets.ReadOnlyModelViewSet):
@@ -72,7 +98,21 @@ class PrivateAddressViewSet(viewsets.ModelViewSet):
             "country", "administrative_area", "locality"
         )
 
+    @transaction.atomic
     def perform_create(self, serializer):
+        user = self.request.user
+        is_first_address = not PrivateAddress.objects.filter(user=user).exists()
+        is_default = serializer.validated_data.get("is_default", False) or is_first_address
+        if is_default:
+            PrivateAddress.objects.filter(user=user).update(is_default=False)
+        serializer.save(is_default=is_default)
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        if serializer.validated_data.get("is_default", False):
+            PrivateAddress.objects.filter(user=self.request.user).exclude(
+                pk=serializer.instance.pk
+            ).update(is_default=False)
         serializer.save()
 
 

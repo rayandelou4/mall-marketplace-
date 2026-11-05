@@ -25,7 +25,7 @@ class MessageSerializer(serializers.ModelSerializer):
         model = Message
         fields = [
             "id", "sender_username", "sender_avatar_url", "content", "image_url", "voice_url",
-            "location_lat", "location_lng", "is_read", "is_osevg","opmdeleted_for_all", "created_at",
+            "location_lat", "location_lng", "is_read", "is_deleted_for_all", "created_at",
             "edited_at", "reply_to", "reply_to_content", "reply_to_sender_username",
         ]
         read_only_fields = fields

@@ -114,6 +114,11 @@ class OrderItem(models.Model):
         max_digits=12, decimal_places=2, validators=[MinValueValidator(0)]
     )
     shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    sale_method = models.CharField(
+        max_length=10,
+        choices=[("delivery", _("Livraison")), ("pickup", _("Remise en main propre"))],
+        default="delivery",
+    )
     is_shipped = models.BooleanField(default=False)
     hidden_by_seller = models.BooleanField(default=False)
 

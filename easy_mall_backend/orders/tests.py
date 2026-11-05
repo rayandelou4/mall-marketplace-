@@ -67,6 +67,61 @@ class OrderCheckoutTests(TestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock_quantity, 3)
 
+    def test_pickup_checkout_does_not_require_address_or_charge_shipping(self):
+        self.product.sale_method = Product.SaleMethod.PICKUP
+        self.product.save(update_fields=["sale_method"])
+        serializer = OrderCreateSerializer(
+            data={"items": [{"product_id": str(self.product.pk), "quantity": 1}]},
+            context={"request": self.request},
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+
+        self.assertEqual(order.shipping_address, "")
+        self.assertEqual(order.total_amount, 10)
+        self.assertEqual(order.items.get().sale_method, Product.SaleMethod.PICKUP)
+        self.assertEqual(order.items.get().shipping_cost, 0)
+
+    def test_mixed_delivery_and_pickup_total_only_charges_delivery(self):
+        self.product.sale_method = Product.SaleMethod.PICKUP
+        self.product.save(update_fields=["sale_method"])
+        delivery_product = Product.objects.create(
+            seller=self.seller,
+            category=self.category,
+            title="Produit à livrer",
+            description="Test",
+            price="20.00",
+            currency="USD",
+            city="Kinshasa",
+            country="RDC",
+            stock_quantity=2,
+            shipping_cost="6.00",
+            status=Product.Status.PUBLISHED,
+            moderation_status=Product.ModerationStatus.APPROVED,
+        )
+        serializer = OrderCreateSerializer(
+            data={
+                "shipping_address": "Adresse test",
+                "items": [
+                    {"product_id": str(self.product.pk), "quantity": 1},
+                    {"product_id": str(delivery_product.pk), "quantity": 1},
+                ],
+            },
+            context={"request": self.request},
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        order = serializer.save()
+
+        self.assertEqual(order.total_amount, 36)
+        self.assertEqual(
+            order.items.get(product=self.product).shipping_cost, 0
+        )
+        self.assertEqual(
+            order.items.get(product=delivery_product).shipping_cost, 6
+        )
+
     def test_checkout_uses_only_buyers_saved_address_and_keeps_snapshot(self):
         country = Country.objects.create(code="CD", name="RDC")
         address = PrivateAddress.objects.create(

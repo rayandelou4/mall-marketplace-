@@ -13,12 +13,14 @@ import {
   fetchLocationPreferences,
   fetchPickupLocations,
   fetchSellerLocation,
+  resolveCountry,
   saveLocationPreferences,
   saveSellerLocation,
   updateDeliveryOption,
   updatePickupLocation,
 } from "../../features/localization/api";
 import { cx } from "../../styles/theme";
+import { WORLD_COUNTRIES, getCountryAlpha2 } from "../../features/localization/countries";
 
 const MODES = [
   ["pickup", "Remise en main propre"],
@@ -107,6 +109,7 @@ export function SellerLocalizationPanel({ t }) {
   }, [location.country_id, location.administrative_area_id]);
 
   const country = countries.find((item) => item.id === location.country_id);
+  const selectedCountryCode = country ? getCountryAlpha2(country.code) : "";
   const area = areas.find((item) => item.id === location.administrative_area_id);
   const locality = children.find((item) => item.id === location.locality_id);
   const preview = [
@@ -119,11 +122,32 @@ export function SellerLocalizationPanel({ t }) {
   async function saveLocation(event) {
     event.preventDefault(); setSaving(true); setError(""); setNotice("");
     try {
-      await saveSellerLocation(location);
+      const savedLocation = await saveSellerLocation({
+        ...location,
+        administrative_area_name: location.administrative_area_id ? "" : areaSearch.trim(),
+      });
+      setLocation((current) => ({
+        ...current,
+        administrative_area_id: savedLocation.administrative_area?.id || "",
+      }));
       await saveLocationPreferences(preferences);
       setNotice("Localisation publique enregistrée.");
     } catch (saveError) { setError(saveError.message || "La localisation n’a pas pu être enregistrée."); }
     finally { setSaving(false); }
+  }
+
+  async function handleCountryChange(code) {
+    const selected = WORLD_COUNTRIES.find((item) => item.code === code);
+    if (!selected) return;
+    setSaving(true); setError(""); setNotice("");
+    try {
+      const savedCountry = await resolveCountry(selected.code, selected.name);
+      setCountries((items) => items.some((item) => item.id === savedCountry.id) ? items : [...items, savedCountry]);
+      setLocation((current) => ({ ...current, country_id: savedCountry.id, administrative_area_id: "", locality_id: "" }));
+      setAreaSearch(""); setSearchedArea(""); setAreas([]); setChildren([]);
+    } catch (saveError) {
+      setError(saveError.message || "Le pays n’a pas pu être sélectionné.");
+    } finally { setSaving(false); }
   }
 
   async function saveDelivery(event) {
@@ -188,8 +212,8 @@ export function SellerLocalizationPanel({ t }) {
       <form onSubmit={saveLocation} className="space-y-4">
         <SectionHeading title="Localisation publique" t={t} />
         <p className={cx("text-sm", t.textMuted)}>Votre adresse complète et vos coordonnées précises restent privées. Choisissez ce qui peut apparaître sur votre profil et vos annonces.</p>
-        <label className="block"><span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Pays</span><select required value={location.country_id} onChange={(event) => setLocation({ ...location, country_id: event.target.value, administrative_area_id: "", locality_id: "" })} className={inputClass}><option value="">Sélectionner un pays</option>{countries.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <div className="grid gap-3 sm:grid-cols-[1fr_auto]"><TextField label="Rechercher une région, ville ou zone" value={areaSearch} onChange={setAreaSearch} placeholder="Saisir quelques lettres" t={t} /><Button type="button" variant="secondary" className="self-end sm:w-auto" disabled={!location.country_id || !areaSearch.trim()} onClick={() => setSearchedArea(areaSearch)}>Rechercher</Button></div>
+        <label className="block"><span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Pays</span><select required value={selectedCountryCode} onChange={(event) => handleCountryChange(event.target.value)} className={inputClass}><option value="">Sélectionner un pays</option>{WORLD_COUNTRIES.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto]"><TextField label="Rechercher une région, ville ou zone" value={areaSearch} onChange={(value) => { setAreaSearch(value); setLocation((current) => ({ ...current, administrative_area_id: "", locality_id: "" })); }} placeholder="Saisir quelques lettres" t={t} /><Button type="button" variant="secondary" className="self-end sm:w-auto" disabled={!location.country_id || !areaSearch.trim()} onClick={() => setSearchedArea(areaSearch)}>Rechercher</Button></div>
         <label className="block"><span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Zone administrative</span><select value={location.administrative_area_id} onChange={(event) => setLocation({ ...location, administrative_area_id: event.target.value, locality_id: "" })} className={inputClass} disabled={!areas.length}><option value="">Choisir dans les résultats</option>{areas.map((item) => <option key={item.id} value={item.id}>{item.name}{item.level_label ? ` · ${item.level_label}` : ` · ${item.level}`}</option>)}</select></label>
         {children.length > 0 && <label className="block"><span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Localité ou quartier (facultatif)</span><select value={location.locality_id} onChange={(event) => setLocation({ ...location, locality_id: event.target.value })} className={inputClass}><option value="">Ne pas préciser</option>{children.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
         <label className="block"><span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Précision publique maximale</span><select value={location.precision} onChange={(event) => setLocation({ ...location, precision: event.target.value })} className={inputClass}><option value="country">Pays uniquement</option><option value="province">Région / province</option><option value="city">Ville / commune</option><option value="locality">Inclure la localité</option></select></label>

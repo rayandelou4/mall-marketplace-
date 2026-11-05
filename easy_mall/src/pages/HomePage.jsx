@@ -108,7 +108,7 @@ export default function MallHomePage() {
     let cancelled = false;
     async function load() {
       try {
-        const [categories, recentProducts, recentServices, popularProducts, popularServices] = await Promise.all([
+        const results = await Promise.allSettled([
           fetchCategories(),
           fetchProducts({ item_type: "product", ordering: "-created_at" }),
           fetchProducts({ item_type: "service", ordering: "-created_at" }),
@@ -116,7 +116,19 @@ export default function MallHomePage() {
           fetchProducts({ item_type: "service", ordering: "-views_count" }),
         ]);
         if (cancelled) return;
-        setData({ loading: false, error: null, categories, recentProducts, recentServices, popularProducts, popularServices });
+        const [categories, recentProducts, recentServices, popularProducts, popularServices] = results.map(
+          (result) => result.status === "fulfilled" ? result.value : []
+        );
+        const failedRequest = results.find((result) => result.status === "rejected");
+        setData({
+          loading: false,
+          error: failedRequest ? `Certaines sections n’ont pas pu être chargées : ${failedRequest.reason?.message || "erreur réseau"}` : null,
+          categories,
+          recentProducts,
+          recentServices,
+          popularProducts,
+          popularServices,
+        });
       } catch (err) {
         if (!cancelled) setData((s) => ({ ...s, loading: false, error: err.message }));
       }
@@ -172,12 +184,12 @@ export default function MallHomePage() {
               { icon: ShieldCheck, label: "Paiement à la remise", text: "Vous payez en main propre" },
               { icon: Users, label: "Vendeurs vérifiés", text: "E-mail confirmé" },
               { icon: Truck, label: "Livraison suivie", text: "Colis suivi de bout en bout" },
-            ].map(({ icon: Icon, label, text }) => (
-              <div key={label} className="flex items-start gap-2">
-                <Icon className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
+            ].map((item) => (
+              <div key={item.label} className="flex items-start gap-2">
+                <item.icon className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
                 <div>
-                  <p className={cx("text-sm font-semibold", t.textPrimary)}>{label}</p>
-                  <p className={cx("text-xs", t.textMuted)}>{text}</p>
+                  <p className={cx("text-sm font-semibold", t.textPrimary)}>{item.label}</p>
+                  <p className={cx("text-xs", t.textMuted)}>{item.text}</p>
                 </div>
               </div>
             ))}

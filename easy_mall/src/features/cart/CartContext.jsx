@@ -1,11 +1,11 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 
 const CartContext = createContext(null);
-const STORAGE_KEY = "mall_cart";
 
-function loadInitialCart() {
+function loadInitialCart(storageKey) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
@@ -18,11 +18,13 @@ function getStockLimit(product) {
 }
 
 export function CartProvider({ children }) {
-  const [items, setItems] = useState(loadInitialCart);
+  const { user } = useAuth();
+  const storageKey = `mall_cart:${user?.id || "guest"}`;
+  const [items, setItems] = useState(() => loadInitialCart(storageKey));
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  }, [items]);
+    localStorage.setItem(storageKey, JSON.stringify(items));
+  }, [items, storageKey]);
 
   function addItem(product, quantity = 1) {
     setItems((prev) => {
@@ -75,7 +77,7 @@ export function CartProvider({ children }) {
     const key = i.product.currency;
     totals[key] = (totals[key] || 0)
       + Number(i.product.price) * i.quantity
-      + Number(i.product.shipping_cost || 0);
+      + (i.product.sale_method === "pickup" ? 0 : Number(i.product.shipping_cost || 0));
     return totals;
   }, {});
 

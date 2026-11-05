@@ -32,7 +32,6 @@ class UserSerializer(serializers.ModelSerializer):
     """Profil public : uniquement les informations non sensibles du vendeur."""
 
     full_name = serializers.ReadOnlyField()
-    is_fully_verified = serializers.ReadOnlyField()
     seller_type_display = serializers.CharField(
         source="get_seller_type_display", read_only=True
     )
@@ -148,6 +147,8 @@ class MeSerializer(UserSerializer):
     Ajoute `is_staff` — jamais exposé sur un profil public (UserSerializer),
     pour ne pas révéler publiquement qui fait partie du staff.
     """
+
+    is_fully_verified = serializers.ReadOnlyField()
 
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + [

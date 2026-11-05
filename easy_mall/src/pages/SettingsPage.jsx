@@ -9,6 +9,7 @@ import { useTheme } from "../features/theme/ThemeContext";
 import { useAuth } from "../features/auth/AuthContext";
 import { updateProfile, changePassword } from "../features/profile/api";
 import { fetchCountries, fetchAreas } from "../features/localization/api";
+import { WORLD_COUNTRIES, getCountryAlpha2 } from "../features/localization/countries";
 import { uploadToCloudinary } from "../lib/cloudinary";
 import { cx } from "../styles/theme";
 
@@ -54,6 +55,7 @@ export default function SettingsPage() {
   const [countries, setCountries] = useState([]);
   const [areas, setAreas] = useState([]);
   const [selectedCountryId, setSelectedCountryId] = useState("");
+  const [selectedCountryCode, setSelectedCountryCode] = useState("");
   const [selectedAreaId, setSelectedAreaId] = useState("");
   const update = (field) => (value) => setForm((f) => ({ ...f, [field]: value }));
 
@@ -66,9 +68,11 @@ export default function SettingsPage() {
         || country.code.toLowerCase() === userCountry.toLowerCase());
       if (match) {
         setSelectedCountryId(match.id);
+        setSelectedCountryCode(getCountryAlpha2(match.code));
       } else {
-        setSelectedCountryId(data[0].id);
-        update("country")(data[0].name);
+        const worldCountry = WORLD_COUNTRIES.find((country) => country.name.toLowerCase() === userCountry.toLowerCase());
+        setSelectedCountryId("");
+        setSelectedCountryCode(worldCountry?.code || "");
       }
     }).catch(() => {});
   }, [user?.country]);
@@ -95,12 +99,11 @@ export default function SettingsPage() {
       .catch(() => setAreas([]));
   }, [selectedCountryId, user?.city]);
 
-  const selectedCountry = countries.find((country) => country.id === selectedCountryId) || null;
-  const selectedArea = areas.find((area) => area.id === selectedAreaId) || null;
-
-  function handleCountryChange(countryId) {
-    const targetCountry = countries.find((country) => country.id === countryId);
-    setSelectedCountryId(countryId);
+  function handleCountryChange(countryCode) {
+    const targetCountry = WORLD_COUNTRIES.find((country) => country.code === countryCode);
+    const storedCountry = countries.find((country) => getCountryAlpha2(country.code) === countryCode);
+    setSelectedCountryCode(countryCode);
+    setSelectedCountryId(storedCountry?.id || "");
     setSelectedAreaId("");
     setAreas([]);
     update("country")(targetCountry ? targetCountry.name : "");
@@ -255,10 +258,10 @@ export default function SettingsPage() {
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Pays</span>
-              <select value={selectedCountryId} onChange={(event) => handleCountryChange(event.target.value)} className={inputClass}>
+              <select value={selectedCountryCode} onChange={(event) => handleCountryChange(event.target.value)} className={inputClass}>
                 <option value="">Sélectionner un pays</option>
-                {countries.map((country) => (
-                  <option key={country.id} value={country.id}>{country.name}</option>
+                {WORLD_COUNTRIES.map((country) => (
+                  <option key={country.code} value={country.code}>{country.name}</option>
                 ))}
               </select>
             </label>

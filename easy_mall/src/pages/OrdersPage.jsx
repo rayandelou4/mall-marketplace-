@@ -9,6 +9,8 @@ import { useAuth } from "../features/auth/AuthContext";
 import { fetchOrders, fetchOrderDetails, confirmReceipt, cancelOrder, deleteOrder } from "../features/orders/api";
 import { createReview } from "../features/reviews/api";
 import { createDispute } from "../features/moderation/api";
+import { ModerationMessageForm } from "../components/ui/ModerationMessageForm";
+import { DISPUTE_REASONS } from "../features/moderation/formOptions";
 import { formatPrice } from "../lib/format";
 import { cx } from "../styles/theme";
 
@@ -56,42 +58,6 @@ function ReviewForm({ t, onSubmit, onCancel }) {
       <div className="flex gap-2">
         <button type="submit" disabled={saving} className="rounded-full bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-60">
           Envoyer l'avis
-        </button>
-        <button type="button" onClick={onCancel} className={cx("rounded-full border px-4 py-1.5 text-xs font-semibold", t.border, t.textMuted)}>
-          Annuler
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function DisputeForm({ t, onSubmit, onCancel }) {
-  const [reason, setReason] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await onSubmit(reason);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className={cx("mt-2 flex flex-col gap-2 rounded-xl border p-3", t.border)}>
-      <textarea
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        placeholder="Expliquez le problème rencontré…"
-        rows={3}
-        required
-        className={cx("rounded-lg border px-3 py-2 text-sm outline-none focus:border-indigo-500", t.inputBg, t.border, t.textPrimary)}
-      />
-      <div className="flex gap-2">
-        <button type="submit" disabled={saving} className="rounded-full bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-60">
-          Envoyer le signalement
         </button>
         <button type="button" onClick={onCancel} className={cx("rounded-full border px-4 py-1.5 text-xs font-semibold", t.border, t.textMuted)}>
           Annuler
@@ -206,9 +172,9 @@ export default function OrdersPage() {
     }
   }
 
-  async function handleSubmitDispute(order, reason) {
+  async function handleSubmitDispute(order, { reason, description }) {
     try {
-      await createDispute({ order_id: order.id, reason });
+      await createDispute({ order_id: order.id, reason, description });
       setOpenDispute(null);
       load();
     } catch (err) {
@@ -327,9 +293,11 @@ export default function OrdersPage() {
                 </div>
 
                 {openDispute === order.id && (
-                  <DisputeForm
+                  <ModerationMessageForm
                     t={t}
-                    onSubmit={(reason) => handleSubmitDispute(order, reason)}
+                    reasons={DISPUTE_REASONS}
+                    submitLabel="Envoyer le litige"
+                    onSubmit={(message) => handleSubmitDispute(order, message)}
                     onCancel={() => setOpenDispute(null)}
                   />
                 )}

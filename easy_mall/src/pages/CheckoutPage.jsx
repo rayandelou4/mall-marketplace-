@@ -13,10 +13,16 @@ import {
   fetchCountries,
   fetchAreas,
   fetchPrivateAddresses,
+  updatePrivateAddress,
 } from "../features/localization/api";
 import { createOrder } from "../features/orders/api";
 import { formatPrice } from "../lib/format";
 import { cx } from "../styles/theme";
+import { WORLD_COUNTRIES } from "../features/localization/countries";
+
+function getItemShippingCost(product) {
+  return product.sale_method === "pickup" ? 0 : Number(product.shipping_cost || 0);
+}
 
 export default function CheckoutPage() {
   const { t } = useTheme();
@@ -30,6 +36,7 @@ export default function CheckoutPage() {
     ? selectedCurrency
     : currencies.length === 1 ? currencies[0] : "";
   const checkoutItems = items.filter(({ product }) => (product.currency || "USD") === activeCurrency);
+  const requiresDelivery = checkoutItems.some(({ product }) => product.sale_method !== "pickup");
   const hasUnavailableStock = checkoutItems.some(({ product, quantity }) => (
     product.stock_quantity != null
     && Number.isFinite(Number(product.stock_quantity))
@@ -42,7 +49,10 @@ export default function CheckoutPage() {
   const [addressDraft, setAddressDraft] = useState({
     label: "",
     countryId: "",
+    countryCode: "",
+    countryName: "",
     areaId: "",
+    areaName: "",
     streetAddress: "",
     landmark: "",
     phoneNumber: "",
@@ -51,6 +61,7 @@ export default function CheckoutPage() {
   const [areas, setAreas] = useState([]);
   const [addressLoading, setAddressLoading] = useState(false);
   const [addressError, setAddressError] = useState(null);
+  const [defaultAddressLoading, setDefaultAddressLoading] = useState(false);
   const [step, setStep] = useState("form");
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -101,8 +112,11 @@ export default function CheckoutPage() {
     try {
       const savedAddress = await createPrivateAddress({
         label: addressDraft.label,
-        country_id: addressDraft.countryId,
-        administrative_area_id: addressDraft.areaId || null,
+        ...(addressDraft.countryId
+          ? { country_id: addressDraft.countryId }
+          : { country_code: addressDraft.countryCode, country_name: addressDraft.countryName }),
+        administrative_area_id: addressDraft.areaName ? null : addressDraft.areaId || null,
+        administrative_area_name: addressDraft.areaName,
         street_address: addressDraft.streetAddress,
         landmark: addressDraft.landmark,
         phone_number: addressDraft.phoneNumber,
@@ -118,16 +132,36 @@ export default function CheckoutPage() {
     }
   }
 
+  async function handleSetDefaultAddress() {
+    if (!selectedAddressId || selectedAddress?.is_default) return;
+    setDefaultAddressLoading(true);
+    setAddressError(null);
+    try {
+      await updatePrivateAddress(selectedAddressId, { is_default: true });
+      setPrivateAddresses((current) => current.map((address) => ({
+        ...address,
+        is_default: address.id === selectedAddressId,
+      })));
+    } catch (err) {
+      setAddressError(err.message);
+    } finally {
+      setDefaultAddressLoading(false);
+    }
+  }
+
   async function handleConfirmOrder(e) {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      if (!selectedAddressId) {
+      if (requiresDelivery && !selectedAddressId) {
         setError("Sélectionnez ou ajoutez une adresse de livraison.");
         return;
       }
-      const createdOrder = await createOrder({ privateAddressId: selectedAddressId, items: checkoutItems });
+      const createdOrder = await createOrder({
+        privateAddressId: requiresDelivery ? selectedAddressId : undefined,
+        items: checkoutItems,
+      });
       setOrder(createdOrder);
       clearCurrency(activeCurrency);
       setStep("done");
@@ -157,7 +191,7 @@ export default function CheckoutPage() {
                     <button key={currency} type="button" onClick={() => setSelectedCurrency(currency)} className={cx("rounded-full border px-4 py-2 text-sm font-semibold", t.border, t.textPrimary)}>
                       {currency} · {formatPrice(items
                         .filter(({ product }) => (product.currency || "USD") === currency)
-                        .reduce((sum, { product, quantity }) => sum + Number(product.price) * quantity + Number(product.shipping_cost || 0), 0), currency)}
+                        .reduce((sum, { product, quantity }) => sum + Number(product.price) * quantity + getItemShippingCost(product), 0), currency)}
                     </button>
                   ))}
                 </div>
@@ -168,17 +202,21 @@ export default function CheckoutPage() {
               <p className={cx("mb-2 text-sm font-semibold", t.textPrimary)}>Récapitulatif {activeCurrency}</p>
               {checkoutItems.map(({ product, quantity }) => (
                 <div key={product.id} className="flex justify-between gap-4 py-1 text-sm">
-                  <span className={t.textMuted}>{product.title} × {quantity}{Number(product.shipping_cost) > 0 ? ` · livraison ${formatPrice(product.shipping_cost, product.currency)}` : ""}</span>
-                  <span className="shrink-0 font-mono">{formatPrice(Number(product.price) * quantity + Number(product.shipping_cost || 0), product.currency)}</span>
+                  <span className={t.textMuted}>
+                    {product.title} × {quantity}{product.sale_method === "pickup"
+                      ? " · retrait en boutique"
+                      : ` · livraison${getItemShippingCost(product) > 0 ? ` ${formatPrice(getItemShippingCost(product), product.currency)}` : ""}`}
+                  </span>
+                  <span className="shrink-0 font-mono">{formatPrice(Number(product.price) * quantity + getItemShippingCost(product), product.currency)}</span>
                 </div>
               ))}
               {activeCurrency && <div className={cx("mt-2 flex justify-between border-t pt-2 text-sm font-semibold", t.border)}>
-                <span>Total avec livraison ({activeCurrency})</span>
-                <span className="font-mono">{formatPrice(checkoutItems.reduce((sum, { product, quantity }) => sum + Number(product.price) * quantity + Number(product.shipping_cost || 0), 0), activeCurrency)}</span>
+                <span>Total à payer ({activeCurrency})</span>
+                <span className="font-mono">{formatPrice(checkoutItems.reduce((sum, { product, quantity }) => sum + Number(product.price) * quantity + getItemShippingCost(product), 0), activeCurrency)}</span>
               </div>}
             </div>
 
-            <section className={cx("rounded-2xl border p-4", t.cardBorder, t.cardBg)}>
+            {requiresDelivery ? <section className={cx("rounded-2xl border p-4", t.cardBorder, t.cardBg)}>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className={cx("text-sm font-semibold", t.textPrimary)}>Adresse de livraison</h2>
@@ -207,9 +245,14 @@ export default function CheckoutPage() {
                     </select>
                   </label>
                   {selectedAddress && (
-                    <p className={cx("text-sm", t.textMuted)}>
-                      {[selectedAddress.street_address, selectedAddress.landmark, selectedAddress.locality?.name, selectedAddress.administrative_area?.name, selectedAddress.country?.name].filter(Boolean).join(", ")}
-                    </p>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className={cx("text-sm", t.textMuted)}>
+                        {[selectedAddress.street_address, selectedAddress.landmark, selectedAddress.locality?.name, selectedAddress.administrative_area?.name || selectedAddress.administrative_area_name, selectedAddress.country?.name].filter(Boolean).join(", ")}
+                      </p>
+                      <button type="button" onClick={handleSetDefaultAddress} disabled={defaultAddressLoading || selectedAddress.is_default} className="text-xs font-semibold text-indigo-600 disabled:text-emerald-700">
+                        {selectedAddress.is_default ? "Adresse par défaut" : defaultAddressLoading ? "Enregistrement…" : "Définir par défaut"}
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
@@ -220,30 +263,47 @@ export default function CheckoutPage() {
                     <TextField label="Nom de l’adresse (facultatif)" value={addressDraft.label} onChange={(value) => setAddressDraft((current) => ({ ...current, label: value }))} placeholder="Maison, travail" t={t} />
                     <label className="block">
                       <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Pays</span>
-                      <select value={addressDraft.countryId} onChange={(event) => setAddressDraft((current) => ({ ...current, countryId: event.target.value, areaId: "" }))} required className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
+                      <select value={addressDraft.countryCode} onChange={(event) => {
+                        const country = WORLD_COUNTRIES.find((item) => item.code === event.target.value);
+                        const saved = countries.find((item) => item.code === event.target.value
+                          || (event.target.value === "CD" && item.code === "COD"));
+                        setAddressDraft((current) => ({
+                          ...current,
+                          countryId: saved?.id || "",
+                          countryCode: country?.code || "",
+                          countryName: country?.name || "",
+                          areaId: "",
+                          areaName: "",
+                        }));
+                      }} required className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
                         <option value="">Sélectionner</option>
-                        {countries.map((country) => <option key={country.id} value={country.id}>{country.name}</option>)}
+                        {WORLD_COUNTRIES.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}
                       </select>
                     </label>
                   </div>
                   <label className="block">
                     <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Province ou région (facultatif)</span>
-                    <select value={addressDraft.areaId} onChange={(event) => setAddressDraft((current) => ({ ...current, areaId: event.target.value }))} disabled={!addressDraft.countryId} className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
+                    <select value={addressDraft.areaId} onChange={(event) => setAddressDraft((current) => ({ ...current, areaId: event.target.value, areaName: "" }))} disabled={!areas.length || Boolean(addressDraft.areaName)} className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
                       <option value="">Sélectionner</option>
                       {areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
                     </select>
                   </label>
+                  <TextField label="Autre province ou région (facultatif)" value={addressDraft.areaName} onChange={(value) => setAddressDraft((current) => ({ ...current, areaName: value, areaId: "" }))} placeholder="Saisir une région non listée" t={t} />
                   <TextField label="Adresse détaillée" value={addressDraft.streetAddress} onChange={(value) => setAddressDraft((current) => ({ ...current, streetAddress: value }))} placeholder="Avenue, numéro ou repère" required t={t} />
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <TextField label="Repère (facultatif)" value={addressDraft.landmark} onChange={(value) => setAddressDraft((current) => ({ ...current, landmark: value }))} placeholder="Près du marché" t={t} />
                     <TextField label="Téléphone (facultatif)" value={addressDraft.phoneNumber} onChange={(value) => setAddressDraft((current) => ({ ...current, phoneNumber: value }))} type="tel" autoComplete="tel" t={t} />
                   </div>
-                  <Button type="button" loading={addressLoading} disabled={addressLoading || !addressDraft.countryId || !addressDraft.streetAddress.trim()} onClick={handleSaveAddress}>
+                  <Button type="button" loading={addressLoading} disabled={addressLoading || !addressDraft.countryCode || !addressDraft.streetAddress.trim()} onClick={handleSaveAddress}>
                     Enregistrer cette adresse
                   </Button>
                 </div>
               )}
-            </section>
+            </section> : (
+              <p className={cx("rounded-xl border p-4 text-sm", t.border, t.textMuted)}>
+                Cette commande se fera en remise en boutique. Aucune adresse de livraison n’est nécessaire.
+              </p>
+            )}
 
             <fieldset>
               <legend className={cx("mb-2 block text-sm font-medium", t.textPrimary)}>Moyen de paiement</legend>
@@ -260,7 +320,7 @@ export default function CheckoutPage() {
               </div>
             </fieldset>
 
-            <Button type="submit" loading={loading} disabled={loading || !selectedAddressId || !activeCurrency || checkoutItems.length === 0 || hasUnavailableStock}>Enregistrer la commande {activeCurrency}</Button>
+            <Button type="submit" loading={loading} disabled={loading || (requiresDelivery && !selectedAddressId) || !activeCurrency || checkoutItems.length === 0 || hasUnavailableStock}>Enregistrer la commande {activeCurrency}</Button>
           </form>
         )}
 
@@ -268,7 +328,13 @@ export default function CheckoutPage() {
           <div className={cx("flex flex-col items-center gap-4 rounded-2xl border p-8 text-center", t.cardBorder, t.cardBg)}>
             <CheckCircle2 className="h-10 w-10 text-emerald-500" />
             <h2 className={cx("text-lg font-semibold", t.textPrimary)}>Commande enregistrée</h2>
-            <p className={cx("max-w-lg text-sm", t.textMuted)}>Convenez de la remise avec le vendeur via la messagerie et payez en main propre.</p>
+            <p className={cx("max-w-lg text-sm", t.textMuted)}>
+              {order.items?.some((item) => item.sale_method === "pickup") && order.items?.some((item) => item.sale_method !== "pickup")
+                ? "Convenez avec les vendeurs, via la messagerie, des modalités de retrait en boutique et de livraison."
+                : order.items?.some((item) => item.sale_method !== "pickup")
+                  ? "Le vendeur organisera la livraison. Convenez des détails via la messagerie."
+                  : "Convenez du retrait en boutique avec le vendeur via la messagerie et payez en main propre."}
+            </p>
             <p className={cx("text-xs", t.textMuted)}>Commande #{order.id.slice(0, 8)} · {formatPrice(order.total_amount, order.currency)}</p>
             <div className="flex flex-wrap justify-center gap-3">
               <Link to="/mes-commandes" className="inline-flex items-center gap-2 rounded-full bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white">

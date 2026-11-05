@@ -8,6 +8,7 @@ import { useTheme } from "../features/theme/ThemeContext";
 import { useAuth } from "../features/auth/AuthContext";
 import { fetchCategories } from "../features/catalog/api";
 import { fetchCountries, fetchAreas } from "../features/localization/api";
+import { WORLD_COUNTRIES, getCountryAlpha2 } from "../features/localization/countries";
 import { fetchProductForEdit, createProduct, updateProduct } from "../features/seller/api";
 import { uploadToCloudinary } from "../lib/cloudinary";
 import { cx } from "../styles/theme";
@@ -22,7 +23,7 @@ const CONDITIONS = [
 
 const EMPTY_FORM = {
   item_type: "product", title: "", description: "", category: "", price: "", currency: "USD", price_unit: "fixed", condition: "bon_etat",
-  city: "", country: "", stock_quantity: 1, shipping_cost: 0, status: "draft",
+  city: "", country: "", stock_quantity: 1, shipping_cost: 0, sale_method: "delivery", status: "draft",
   image_1: "", image_2: "", image_3: "",
 };
 
@@ -37,6 +38,7 @@ export default function ListingFormPage() {
   const [countries, setCountries] = useState([]);
   const [areas, setAreas] = useState([]);
   const [selectedCountryId, setSelectedCountryId] = useState("");
+  const [selectedCountryCode, setSelectedCountryCode] = useState("");
   const [selectedAreaId, setSelectedAreaId] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(isEdit);
@@ -56,9 +58,17 @@ export default function ListingFormPage() {
     fetchCategories().then(setCategories).catch(() => {});
     fetchCountries().then((items) => {
       setCountries(items);
-      const storedCountry = (form.country || "").trim();
-      const match = items.find((country) => country.name.toLowerCase() === storedCountry.toLowerCase());
-      if (match) setSelectedCountryId(match.id);
+      const storedCountry = (form.country || "").trim().toLowerCase();
+      const match = items.find((country) => country.name.toLowerCase() === storedCountry
+        || getCountryAlpha2(country.code).toLowerCase() === storedCountry);
+      const worldCountry = WORLD_COUNTRIES.find((country) => country.name.toLowerCase() === storedCountry);
+      if (match) {
+        setSelectedCountryId(match.id);
+        setSelectedCountryCode(getCountryAlpha2(match.code));
+      } else {
+        setSelectedCountryId("");
+        setSelectedCountryCode(worldCountry?.code || "");
+      }
     }).catch(() => {});
   }, []);
 
@@ -77,9 +87,11 @@ export default function ListingFormPage() {
     }).catch(() => setAreas([]));
   }, [selectedCountryId, form.city]);
 
-  function handleCountryChange(countryId) {
-    const targetCountry = countries.find((country) => country.id === countryId) || null;
-    setSelectedCountryId(countryId);
+  function handleCountryChange(countryCode) {
+    const targetCountry = WORLD_COUNTRIES.find((country) => country.code === countryCode) || null;
+    const storedCountry = countries.find((country) => getCountryAlpha2(country.code) === countryCode);
+    setSelectedCountryCode(countryCode);
+    setSelectedCountryId(storedCountry?.id || "");
     setSelectedAreaId("");
     setAreas([]);
     setForm((current) => ({ ...current, country: targetCountry ? targetCountry.name : "", city: "" }));
@@ -108,6 +120,7 @@ export default function ListingFormPage() {
           country: p.country,
           stock_quantity: p.stock_quantity,
           shipping_cost: p.shipping_cost,
+          sale_method: p.sale_method || "delivery",
           status: p.status,
           image_1: p.images?.[0]?.image_url || "",
           image_2: p.images?.[1]?.image_url || "",
@@ -169,6 +182,7 @@ export default function ListingFormPage() {
       country: form.country,
       stock_quantity: form.item_type === "product" ? Number(form.stock_quantity) : 1,
       shipping_cost: form.item_type === "product" ? form.shipping_cost : 0,
+      sale_method: form.item_type === "product" ? form.sale_method : "delivery",
       status: form.status,
       images,
     };
@@ -273,16 +287,47 @@ export default function ListingFormPage() {
                     <option value="day">Par jour</option>
                   </select>
                 </label>
-              ) : <TextField label="Frais de livraison" type="number" value={form.shipping_cost} onChange={update("shipping_cost")} t={t} />}
+              ) : (
+                <TextField
+                  label="Frais de livraison"
+                  type="number"
+                  value={form.sale_method === "delivery" ? form.shipping_cost : 0}
+                  onChange={update("shipping_cost")}
+                  disabled={form.sale_method === "pickup"}
+                  t={t}
+                />
+              )}
             </div>
+
+            {form.item_type === "product" && (
+              <fieldset>
+                <legend className={cx("mb-2 block text-sm font-medium", t.textPrimary)}>Mode de vente</legend>
+                <div className={cx("grid grid-cols-2 gap-2 rounded-xl border p-1", t.border)}>
+                  {[["delivery", "Livraison"], ["pickup", "Remise en main propre"]].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={form.sale_method === value}
+                      onClick={() => update("sale_method")(value)}
+                      className={cx(
+                        "rounded-lg px-3 py-2 text-sm font-semibold transition",
+                        form.sale_method === value ? "bg-indigo-600 text-white" : t.textMuted,
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
                 <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Pays</span>
-                <select value={selectedCountryId} onChange={(event) => handleCountryChange(event.target.value)} className={inputClass}>
+                <select value={selectedCountryCode} onChange={(event) => handleCountryChange(event.target.value)} className={inputClass}>
                   <option value="">Sélectionner un pays</option>
-                  {countries.map((country) => (
-                    <option key={country.id} value={country.id}>{country.name}</option>
+                  {WORLD_COUNTRIES.map((country) => (
+                    <option key={country.code} value={country.code}>{country.name}</option>
                   ))}
                 </select>
               </label>

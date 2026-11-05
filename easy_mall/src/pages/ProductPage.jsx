@@ -11,6 +11,8 @@ import { useCart } from "../features/cart/CartContext";
 import { fetchProduct, fetchComparisons, toggleFavorite } from "../features/catalog/api";
 import { fetchReviews } from "../features/reviews/api";
 import { createReport } from "../features/moderation/api";
+import { ModerationMessageForm } from "../components/ui/ModerationMessageForm";
+import { PRODUCT_REPORT_REASONS } from "../features/moderation/formOptions";
 import { formatPrice } from "../lib/format";
 import { createWhatsAppUrl } from "../lib/whatsapp";
 import { cx } from "../styles/theme";
@@ -42,8 +44,6 @@ export default function ProductPage() {
   const [actionNotice, setActionNotice] = useState(null);
   const [contactOptionsOpen, setContactOptionsOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
-  const [reportReason, setReportReason] = useState("misleading_description");
-  const [reportMessage, setReportMessage] = useState("");
   const [reportSending, setReportSending] = useState(false);
 
   useEffect(() => {
@@ -177,19 +177,17 @@ export default function ProductPage() {
     }
   }
 
-  async function handleSubmitReport(event) {
-    event.preventDefault();
+  async function handleSubmitReport({ reason, description }) {
     if (!isAuthenticated) return navigate("/auth");
     if (!product) return;
     try {
       setReportSending(true);
       await createReport({
         product_id: product.id,
-        reason: reportReason,
-        description: reportMessage,
+        reason,
+        description,
       });
       setReportOpen(false);
-      setReportMessage("");
       setActionNotice("Signalement envoyé au modérateur. Un examen sera effectué.");
     } catch (err) {
       setActionNotice(err.message);
@@ -260,8 +258,12 @@ export default function ProductPage() {
                 {product.status === "archived" && (
                   <p className="mt-2 text-sm font-semibold text-amber-700">Annonce archivée : consultation uniquement, achat indisponible.</p>
                 )}
-                {product.item_type !== "service" && Number(product.shipping_cost) > 0 && (
-                  <p className={cx("mt-1 text-sm", t.textMuted)}>+ {formatPrice(product.shipping_cost, product.currency)} de livraison</p>
+                {product.item_type !== "service" && (
+                  <p className={cx("mt-1 text-sm", t.textMuted)}>
+                    {product.sale_method === "pickup"
+                      ? "Remise en main propre avec le vendeur"
+                      : `Livraison${Number(product.shipping_cost) > 0 ? ` : ${formatPrice(product.shipping_cost, product.currency)}` : ""}`}
+                  </p>
                 )}
 
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row">
@@ -301,41 +303,15 @@ export default function ProductPage() {
                 </div>
 
                 {reportOpen && (
-                  <form onSubmit={handleSubmitReport} className={cx("mt-4 rounded-2xl border p-4", t.cardBorder, t.cardBg)}>
-                    <label className={cx("mb-2 block text-sm font-semibold", t.textPrimary)} htmlFor="report-reason">
-                      Motif du signalement
-                    </label>
-                    <select
-                      id="report-reason"
-                      value={reportReason}
-                      onChange={(event) => setReportReason(event.target.value)}
-                      className={cx("w-full rounded-xl border px-3 py-2 text-sm outline-none", t.inputBg, t.border, t.textPrimary)}
-                    >
-                      <option value="misleading_description">Description trompeuse</option>
-                      <option value="misleading_photos">Photos trompeuses</option>
-                      <option value="counterfeit_product">Produit potentiellement contrefait</option>
-                      <option value="prohibited_product">Produit interdit</option>
-                      <option value="scam_suspected">Suspicion d’arnaque</option>
-                      <option value="misleading_pricing">Prix ou caractéristiques trompeurs</option>
-                      <option value="duplicate_or_spam">Annonce dupliquée ou spam</option>
-                      <option value="other">Autre motif</option>
-                    </select>
-                    <textarea
-                      value={reportMessage}
-                      onChange={(event) => setReportMessage(event.target.value)}
-                      placeholder="Détaillez le problème observé…"
-                      rows={3}
-                      className={cx("mt-3 w-full rounded-xl border px-3 py-2 text-sm outline-none", t.inputBg, t.border, t.textPrimary)}
-                    />
-                    <div className="mt-3 flex gap-2">
-                      <button type="submit" disabled={reportSending} className="rounded-full bg-indigo-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-60">
-                        {reportSending ? "Envoi…" : "Envoyer"}
-                      </button>
-                      <button type="button" onClick={() => setReportOpen(false)} className={cx("rounded-full border px-4 py-2 text-xs font-semibold", t.border, t.textMuted)}>
-                        Fermer
-                      </button>
-                    </div>
-                  </form>
+                  <ModerationMessageForm
+                    t={t}
+                    reasons={PRODUCT_REPORT_REASONS}
+                    defaultReason="misleading_description"
+                    submitLabel="Envoyer le signalement"
+                    loading={reportSending}
+                    onSubmit={handleSubmitReport}
+                    onCancel={() => setReportOpen(false)}
+                  />
                 )}
 
                 <div className={cx("mt-5 rounded-2xl border p-3", t.cardBorder)}>

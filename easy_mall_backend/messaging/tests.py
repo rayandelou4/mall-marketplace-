@@ -112,7 +112,10 @@ class ConversationStartSerializerTests(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         message = serializer.save()
 
-        self.assertEqual(MessageSerializer(message).data["voice_url"], voice_url)
+        serialized = MessageSerializer(message).data
+        self.assertEqual(serialized["voice_url"], voice_url)
+        self.assertIn("is_deleted_for_all", serialized)
+        self.assertFalse(serialized["is_deleted_for_all"])
         self.assertEqual(
             ConversationSerializer(conversation, context={"request": self.request}).data["last_message"]["content"],
             "Message vocal",

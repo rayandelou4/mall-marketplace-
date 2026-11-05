@@ -58,15 +58,23 @@ function AppRoutes() {
   );
 }
 
+function AppContent() {
+  const { user } = useAuth();
+
+  return (
+    <CartProvider key={user?.id || "guest"}>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </CartProvider>
+  );
+}
+
 export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <CartProvider>
-          <BrowserRouter>
-            <AppRoutes />
-          </BrowserRouter>
-        </CartProvider>
+        <AppContent />
       </AuthProvider>
     </ThemeProvider>
   );

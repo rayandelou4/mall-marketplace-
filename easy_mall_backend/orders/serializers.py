@@ -45,6 +45,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "quantity",
             "unit_price",
             "shipping_cost",
+            "sale_method",
             "subtotal",
             "currency",
             "payment_method",
@@ -106,6 +107,10 @@ class OrderCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         address_id = attrs.pop("private_address_id", None)
+        requires_delivery = any(
+            entry["product"].sale_method == Product.SaleMethod.DELIVERY
+            for entry in attrs["items"]
+        )
         if address_id:
             buyer = self.context["request"].user
             address = (
@@ -117,21 +122,24 @@ class OrderCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     {"private_address_id": "Adresse introuvable ou non autorisée."}
                 )
-            parts = [
-                address.country.name,
-                address.administrative_area.name if address.administrative_area else "",
-                address.locality.name if address.locality else "",
-                address.street_address,
-                address.landmark,
-            ]
-            attrs["shipping_address"] = ", ".join(part for part in parts if part)
-            attrs["shipping_address_record"] = address
-        elif not attrs.get("shipping_address", "").strip():
+            if requires_delivery:
+                parts = [
+                    address.country.name,
+                    address.administrative_area.name if address.administrative_area else "",
+                    address.locality.name if address.locality else "",
+                    address.street_address,
+                    address.landmark,
+                ]
+                attrs["shipping_address"] = ", ".join(part for part in parts if part)
+                attrs["shipping_address_record"] = address
+        elif requires_delivery and not attrs.get("shipping_address", "").strip():
             raise serializers.ValidationError(
                 {
                     "shipping_address": "Choisissez une adresse enregistrée ou indiquez une adresse de livraison."
                 }
             )
+        else:
+            attrs["shipping_address"] = ""
         return attrs
 
     def validate_items(self, value):
@@ -317,7 +325,12 @@ class OrderCreateSerializer(serializers.Serializer):
                 product_title=entry["product"].title,
                 quantity=entry["quantity"],
                 unit_price=entry["product"].price,
-                shipping_cost=entry["product"].shipping_cost,
+                shipping_cost=(
+                    entry["product"].shipping_cost
+                    if entry["product"].sale_method == Product.SaleMethod.DELIVERY
+                    else 0
+                ),
+                sale_method=entry["product"].sale_method,
             )
             for entry in items_data
         ]

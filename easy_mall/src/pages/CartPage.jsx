@@ -43,7 +43,8 @@ export default function CartPage() {
             <div className="flex flex-col gap-8">
               {Object.entries(itemsByCurrency).map(([currency, currencyItems]) => {
                 const total = currencyItems.reduce((sum, { product, quantity }) => (
-                  sum + Number(product.price) * quantity + Number(product.shipping_cost || 0)
+                  sum + Number(product.price) * quantity
+                    + (product.sale_method === "pickup" ? 0 : Number(product.shipping_cost || 0))
                 ), 0);
                 const hasUnavailableStock = currencyItems.some(({ product, quantity }) => (
                   product.stock_quantity != null
@@ -71,7 +72,9 @@ export default function CartPage() {
                               {product.title}
                             </Link>
                             <p className="font-mono text-sm text-indigo-600">{formatPrice(Number(product.price) * quantity, currency)} · {quantity}</p>
-                            {Number(product.shipping_cost) > 0 && <p className={cx("text-xs", t.textMuted)}>Livraison : {formatPrice(product.shipping_cost, currency)}</p>}
+                            <p className={cx("text-xs", t.textMuted)}>
+                              {product.sale_method === "pickup" ? "Remise en main propre" : `Livraison${Number(product.shipping_cost) > 0 ? ` : ${formatPrice(product.shipping_cost, currency)}` : ""}`}
+                            </p>
                             {product.stock_quantity != null && quantity > Number(product.stock_quantity) && <p className="text-xs font-medium text-rose-600">Stock insuffisant : {product.stock_quantity} disponible(s).</p>}
                           </div>
                           <div className={cx("flex items-center gap-2 rounded-full border px-2 py-1", t.border)}>
@@ -91,7 +94,7 @@ export default function CartPage() {
                     </div>
                     <div className={cx("mt-4 rounded-2xl border p-4", t.cardBorder, t.cardBg)}>
                       <div className="flex justify-between text-sm">
-                        <span className={t.textMuted}>Total avec livraison ({currency})</span>
+                        <span className={t.textMuted}>Total ({currency})</span>
                         <span className="font-mono font-semibold">{formatPrice(total, currency)}</span>
                       </div>
                       {hasUnavailableStock && <p className="mt-3 text-sm text-rose-600">La quantité d’au moins un article dépasse le stock disponible. Ajustez-la pour continuer.</p>}

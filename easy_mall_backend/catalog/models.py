@@ -137,6 +137,10 @@ class Product(models.Model):
         HOUR = "hour", _("Par heure")
         DAY = "day", _("Par jour")
 
+    class SaleMethod(models.TextChoices):
+        DELIVERY = "delivery", _("Livraison")
+        PICKUP = "pickup", _("Remise en main propre")
+
     class Condition(models.TextChoices):
         NEUF = "neuf", _("Neuf")
         COMME_NEUF = "comme_neuf", _("Comme neuf")
@@ -189,6 +193,9 @@ class Product(models.Model):
     stock_quantity = models.PositiveIntegerField(_("stock disponible"), default=1)
     shipping_cost = models.DecimalField(
         _("frais de livraison"), max_digits=10, decimal_places=2, default=0
+    )
+    sale_method = models.CharField(
+        max_length=10, choices=SaleMethod.choices, default=SaleMethod.DELIVERY
     )
 
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)

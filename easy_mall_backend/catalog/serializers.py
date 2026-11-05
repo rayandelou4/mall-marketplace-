@@ -157,6 +157,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             "price_unit_display",
             "condition",
             "condition_display",
+            "sale_method",
             "city",
             "seller_location_display",
             "primary_image",
@@ -231,6 +232,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             "country",
             "stock_quantity",
             "shipping_cost",
+            "sale_method",
             "seller_location_display",
             "status",
             "moderation_status",
@@ -297,6 +299,7 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
             "country",
             "stock_quantity",
             "shipping_cost",
+            "sale_method",
             "status",
             "images",
         ]

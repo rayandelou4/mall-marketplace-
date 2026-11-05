@@ -210,6 +210,18 @@ class ProductCatalogFilterTests(APITestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("ordering", response.data)
 
+    def test_views_count_ordering_is_supported(self):
+        most_viewed = self.create_product(self.individual, title="Populaire", views_count=12)
+        least_viewed = self.create_product(self.professional, title="Nouveau", views_count=2)
+
+        response = self.client.get(self.url, {"ordering": "-views_count"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["id"] for item in response.data["results"]],
+            [str(most_viewed.pk), str(least_viewed.pk)],
+        )
+
 
 class SellerFavoriteTests(APITestCase):
     def setUp(self):
