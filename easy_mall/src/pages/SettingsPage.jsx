@@ -4,7 +4,7 @@ import { CheckCircle2, Mail } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { SectionHeading } from "../components/ui/StatusBlocks";
-import { TextField, PasswordField, Button, Alert } from "../components/ui/FormControls";
+import { AreaField, TextField, PasswordField, Button, Alert } from "../components/ui/FormControls";
 import { useTheme } from "../features/theme/ThemeContext";
 import { useAuth } from "../features/auth/AuthContext";
 import { updateProfile, changePassword } from "../features/profile/api";
@@ -56,7 +56,6 @@ export default function SettingsPage() {
   const [areas, setAreas] = useState([]);
   const [selectedCountryId, setSelectedCountryId] = useState("");
   const [selectedCountryCode, setSelectedCountryCode] = useState("");
-  const [selectedAreaId, setSelectedAreaId] = useState("");
   const update = (field) => (value) => setForm((f) => ({ ...f, [field]: value }));
 
   useEffect(() => {
@@ -80,40 +79,22 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!selectedCountryId) {
       setAreas([]);
-      setSelectedAreaId("");
       return;
     }
 
     fetchAreas({ country: selectedCountryId, level: "province" })
-      .then((data) => {
-        setAreas(data);
-        const userCity = (user?.city || "").trim();
-        const match = data.find((area) => area.name.toLowerCase() === userCity.toLowerCase());
-        if (match) {
-          setSelectedAreaId(match.id);
-          update("city")(match.name);
-        } else {
-          setSelectedAreaId("");
-        }
-      })
+      .then(setAreas)
       .catch(() => setAreas([]));
-  }, [selectedCountryId, user?.city]);
+  }, [selectedCountryId]);
 
   function handleCountryChange(countryCode) {
     const targetCountry = WORLD_COUNTRIES.find((country) => country.code === countryCode);
     const storedCountry = countries.find((country) => getCountryAlpha2(country.code) === countryCode);
     setSelectedCountryCode(countryCode);
     setSelectedCountryId(storedCountry?.id || "");
-    setSelectedAreaId("");
     setAreas([]);
     update("country")(targetCountry ? targetCountry.name : "");
     update("city")("");
-  }
-
-  function handleAreaChange(areaId) {
-    const targetArea = areas.find((area) => area.id === areaId);
-    setSelectedAreaId(areaId);
-    update("city")(targetArea ? targetArea.name : "");
   }
 
   async function handleAvatarChange(file) {
@@ -265,19 +246,7 @@ export default function SettingsPage() {
                 ))}
               </select>
             </label>
-            <label className="block">
-              <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Province / ville</span>
-              <select value={selectedAreaId} onChange={(event) => handleAreaChange(event.target.value)} className={inputClass} disabled={!selectedCountryId}>
-                <option value="">Sélectionner</option>
-                {areas.map((area) => (
-                  <option key={area.id} value={area.id}>{area.name}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <TextField label="Ville affichée" value={form.city} onChange={update("city")} t={t} />
-            <TextField label="Pays affiché" value={form.country} onChange={update("country")} t={t} />
+            <AreaField label="Province / région" value={form.city} onChange={update("city")} areas={areas} placeholder="Choisir une suggestion ou saisir une région" maxLength={100} t={t} />
           </div>
           <Button type="submit" loading={savingProfile || uploadingAvatar} disabled={uploadingAvatar}>Enregistrer le profil</Button>
         </form>

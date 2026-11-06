@@ -56,7 +56,7 @@ class VerificationDocumentSerializer(serializers.ModelSerializer):
         ):
             # Seuls les administrateurs autorisés peuvent télécharger les documents
             return request.build_absolute_uri(
-                f"/api/seller-verification/documents/{obj.id}/download/"
+                f"/api/v1/seller-verification/documents/{obj.id}/download/"
             )
         return ""
 

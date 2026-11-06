@@ -17,6 +17,7 @@ from .serializers import (
     OrderCancelSerializer,
     OrderCreateSerializer,
     OrderDetailSerializer,
+    OrderItemSerializer,
 )
 
 
@@ -151,6 +152,8 @@ class OrderCheckoutTests(TestCase):
         self.assertEqual(order.shipping_address, snapshot)
         self.assertNotIn("shipping_address_record", response_data)
         self.assertEqual(response_data["shipping_address"], snapshot)
+        seller_sale_data = OrderItemSerializer(order.items.get()).data
+        self.assertEqual(seller_sale_data["shipping_address"], snapshot)
 
     def test_checkout_rejects_another_users_saved_address(self):
         country = Country.objects.create(code="CD", name="RDC")

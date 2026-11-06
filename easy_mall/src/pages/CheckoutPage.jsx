@@ -4,7 +4,7 @@ import { CheckCircle2, MessageCircle, PackageCheck } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { SectionHeading, ErrorBlock } from "../components/ui/StatusBlocks";
-import { Button, TextField } from "../components/ui/FormControls";
+import { AreaField, Button, TextField } from "../components/ui/FormControls";
 import { useTheme } from "../features/theme/ThemeContext";
 import { useAuth } from "../features/auth/AuthContext";
 import { useCart } from "../features/cart/CartContext";
@@ -51,7 +51,6 @@ export default function CheckoutPage() {
     countryId: "",
     countryCode: "",
     countryName: "",
-    areaId: "",
     areaName: "",
     streetAddress: "",
     landmark: "",
@@ -96,7 +95,6 @@ export default function CheckoutPage() {
   useEffect(() => {
     if (!addressDraft.countryId) {
       setAreas([]);
-      setAddressDraft((current) => ({ ...current, areaId: "" }));
       return;
     }
     fetchAreas({ country: addressDraft.countryId, level: "province" })
@@ -115,7 +113,7 @@ export default function CheckoutPage() {
         ...(addressDraft.countryId
           ? { country_id: addressDraft.countryId }
           : { country_code: addressDraft.countryCode, country_name: addressDraft.countryName }),
-        administrative_area_id: addressDraft.areaName ? null : addressDraft.areaId || null,
+        administrative_area_id: null,
         administrative_area_name: addressDraft.areaName,
         street_address: addressDraft.streetAddress,
         landmark: addressDraft.landmark,
@@ -221,6 +219,7 @@ export default function CheckoutPage() {
                 <div>
                   <h2 className={cx("text-sm font-semibold", t.textPrimary)}>Adresse de livraison</h2>
                   <p className={cx("mt-1 text-xs", t.textMuted)}>Visible uniquement pour vous et les personnes autorisées à traiter cette commande.</p>
+                  <p className={cx("mt-1 text-xs", t.textMuted)}>L’adresse par défaut de votre profil est présélectionnée. Vous pouvez en choisir une autre ou en ajouter une pour cette commande.</p>
                 </div>
                 {privateAddresses.length > 0 && (
                   <button type="button" onClick={() => setIsAddingAddress(!isAddingAddress)} className="text-sm font-semibold text-indigo-600">
@@ -272,7 +271,6 @@ export default function CheckoutPage() {
                           countryId: saved?.id || "",
                           countryCode: country?.code || "",
                           countryName: country?.name || "",
-                          areaId: "",
                           areaName: "",
                         }));
                       }} required className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
@@ -281,14 +279,7 @@ export default function CheckoutPage() {
                       </select>
                     </label>
                   </div>
-                  <label className="block">
-                    <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Province ou région (facultatif)</span>
-                    <select value={addressDraft.areaId} onChange={(event) => setAddressDraft((current) => ({ ...current, areaId: event.target.value, areaName: "" }))} disabled={!areas.length || Boolean(addressDraft.areaName)} className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.inputBg, t.border, t.textPrimary)}>
-                      <option value="">Sélectionner</option>
-                      {areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
-                    </select>
-                  </label>
-                  <TextField label="Autre province ou région (facultatif)" value={addressDraft.areaName} onChange={(value) => setAddressDraft((current) => ({ ...current, areaName: value, areaId: "" }))} placeholder="Saisir une région non listée" t={t} />
+                  <AreaField label="Province / région (facultatif)" value={addressDraft.areaName} onChange={(value) => setAddressDraft((current) => ({ ...current, areaName: value }))} areas={areas} placeholder="Choisir une suggestion ou saisir une région" maxLength={150} t={t} />
                   <TextField label="Adresse détaillée" value={addressDraft.streetAddress} onChange={(value) => setAddressDraft((current) => ({ ...current, streetAddress: value }))} placeholder="Avenue, numéro ou repère" required t={t} />
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <TextField label="Repère (facultatif)" value={addressDraft.landmark} onChange={(value) => setAddressDraft((current) => ({ ...current, landmark: value }))} placeholder="Près du marché" t={t} />

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useId, useState } from "react";
 import { Eye, EyeOff, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { cx } from "../../styles/theme";
 
@@ -35,6 +35,32 @@ export function TextField({
         )}
       />
       {hint && <span className={cx("mt-1 block text-xs", t.textMuted)}>{hint}</span>}
+    </label>
+  );
+}
+
+export function AreaField({ label, value, onChange, areas, placeholder, maxLength, t }) {
+  const listId = useId();
+  return (
+    <label className="block">
+      <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>{label}</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        list={listId}
+        className={cx(
+          "w-full rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:border-indigo-500",
+          t.inputBg,
+          t.border,
+          t.textPrimary
+        )}
+      />
+      <datalist id={listId}>
+        {areas.map((area) => <option key={area.id} value={area.name} />)}
+      </datalist>
     </label>
   );
 }

@@ -19,6 +19,7 @@ import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
 import FavoritesPage from "./pages/FavoritesPage";
 import NotificationsPage from "./pages/NotificationsPage";
+import SignupAddressPage from "./pages/SignupAddressPage";
 
 function AppRoutes() {
   const { bootstrapping } = useAuth();
@@ -37,6 +38,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/" element={<HomePage />} />
       <Route path="/auth" element={<AuthPage />} />
+      <Route path="/inscription/adresse" element={<SignupAddressPage />} />
       <Route path="/catalogue" element={<CatalogPage />} />
       <Route path="/produit/:id" element={<ProductPage />} />
       <Route path="/panier" element={<CartPage />} />

@@ -135,6 +135,17 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     is_active = models.BooleanField(_("actif"), default=True)
     is_staff = models.BooleanField(_("accès admin"), default=False)
+    is_suspended = models.BooleanField(_("compte suspendu"), default=False)
+    suspension_reason = models.TextField(blank=True)
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    suspension_previous_is_active = models.BooleanField(default=True)
+    suspended_by = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="accounts_suspended",
+    )
 
     date_joined = models.DateTimeField(_("date d'inscription"), default=timezone.now)
     # `last_login` est déjà fourni par AbstractBaseUser.

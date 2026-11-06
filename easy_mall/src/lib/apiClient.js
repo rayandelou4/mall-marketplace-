@@ -103,5 +103,21 @@ export async function apiRequest(path, options = {}) {
   return parseOrThrow(response);
 }
 
+export async function apiDownload(path) {
+  let response = await rawFetch(path);
+
+  if (response.status === 401 && refreshToken) {
+    try {
+      await refreshAccessToken();
+      response = await rawFetch(path);
+    } catch {
+      // Keep the original response so callers receive the API error.
+    }
+  }
+
+  if (!response.ok) await parseOrThrow(response);
+  return response.blob();
+}
+
 // Le backend DRF pagine par défaut ({count, next, previous, results}).
 export const unwrap = (payload) => (Array.isArray(payload) ? payload : payload?.results ?? []);

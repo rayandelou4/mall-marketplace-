@@ -6,6 +6,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import User
 from catalog.models import Category, Product
+from messaging.models import Conversation, ConversationParticipant, Message
 from orders.models import Order, OrderItem
 
 
@@ -264,6 +265,48 @@ class ModerationAPITests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(len(response.data["results"]), 1)
 
+    def test_only_moderation_admin_can_review_disputes(self):
+        self.client.force_authenticate(self.buyer)
+        created = self.client.post(
+            "/api/v1/moderation/disputes/",
+            {"order_id": str(self.order.id), "reason": "Commande non reçue."},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+        dispute_id = created.data["id"]
+        review_url = f"/api/v1/moderation/disputes/{dispute_id}/review/"
+
+        staff = User.objects.create_user(
+            email="review-staff@mall.test",
+            phone_number="+243000000008",
+            username="reviewstaff",
+            password="ReviewStaff123!",
+            is_staff=True,
+        )
+        self.client.force_authenticate(staff)
+        forbidden = self.client.post(
+            review_url,
+            {"status": "resolved", "resolution": "Décision non autorisée."},
+            format="json",
+        )
+        self.assertEqual(forbidden.status_code, 403)
+
+        self.client.force_authenticate(self.admin)
+        missing_resolution = self.client.post(
+            review_url, {"status": "resolved"}, format="json"
+        )
+        self.assertEqual(missing_resolution.status_code, 400)
+
+        response = self.client.post(
+            review_url,
+            {"status": "resolved", "resolution": "Remboursement validé."},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.data["status"], "resolved")
+        self.assertEqual(response.data["resolution"], "Remboursement validé.")
+        self.assertEqual(len(response.data["case_history"]), 2)
+
     def test_buyer_can_open_dispute_on_own_order(self):
         self.client.force_authenticate(self.buyer)
         response = self.client.post(
@@ -348,3 +391,118 @@ class ModerationAPITests(TestCase):
         response = self.client.get("/api/v1/moderation/reports/")
         self.assertEqual(response.status_code, 200, response.content)
         self.assertGreaterEqual(len(response.data["results"] if "results" in response.data else response.data), 0)
+
+    def test_user_can_report_another_participants_message(self):
+        conversation = Conversation.objects.create()
+        ConversationParticipant.objects.create(conversation=conversation, user=self.buyer)
+        ConversationParticipant.objects.create(conversation=conversation, user=self.seller)
+        message = Message.objects.create(
+            conversation=conversation,
+            sender=self.seller,
+            content="Message menaçant.",
+        )
+        self.client.force_authenticate(self.buyer)
+
+        response = self.client.post(
+            "/api/v1/moderation/message-reports/",
+            {"message_id": str(message.id), "reason": "threat", "description": "Menace reçue."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.data["reported_user"], str(self.seller.id))
+        self.assertEqual(response.data["message_data"]["content"], "Message menaçant.")
+
+        duplicate = self.client.post(
+            "/api/v1/moderation/message-reports/",
+            {"message_id": str(message.id), "reason": "threat"},
+            format="json",
+        )
+        self.assertEqual(duplicate.status_code, 400, duplicate.content)
+
+        self.client.force_authenticate(self.seller)
+        own_message = self.client.post(
+            "/api/v1/moderation/message-reports/",
+            {"message_id": str(message.id), "reason": "threat"},
+            format="json",
+        )
+        self.assertEqual(own_message.status_code, 400, own_message.content)
+
+    def test_only_moderation_admin_can_review_message_report(self):
+        conversation = Conversation.objects.create()
+        ConversationParticipant.objects.create(conversation=conversation, user=self.buyer)
+        ConversationParticipant.objects.create(conversation=conversation, user=self.seller)
+        message = Message.objects.create(conversation=conversation, sender=self.seller, content="Inappropriate")
+        self.client.force_authenticate(self.buyer)
+        report = self.client.post(
+            "/api/v1/moderation/message-reports/",
+            {"message_id": str(message.id), "reason": "inappropriate"},
+            format="json",
+        )
+        report_url = f"/api/v1/moderation/message-reports/{report.data['id']}/review/"
+
+        forbidden = self.client.post(report_url, {"status": "valid"}, format="json")
+        self.assertEqual(forbidden.status_code, 403)
+
+        self.client.force_authenticate(self.admin)
+        reviewed = self.client.post(
+            report_url,
+            {"status": "valid", "review_notes": "Contenu contraire aux règles."},
+            format="json",
+        )
+        self.assertEqual(reviewed.status_code, 200, reviewed.content)
+        self.assertEqual(reviewed.data["status"], "valid")
+
+    def test_admin_can_suspend_and_restore_an_account_with_history(self):
+        url = f"/api/v1/moderation/accounts/{self.seller.id}/suspension/"
+        staff = User.objects.create_user(
+            email="account-staff@mall.test",
+            phone_number="+243000000009",
+            username="accountstaff",
+            password="Staff123!",
+            is_staff=True,
+        )
+        self.client.force_authenticate(staff)
+        forbidden = self.client.post(url, {"suspended": True, "reason": "Fraude."}, format="json")
+        self.assertEqual(forbidden.status_code, 403)
+
+        self.client.force_authenticate(self.admin)
+        missing_reason = self.client.post(url, {"suspended": True, "reason": " "}, format="json")
+        self.assertEqual(missing_reason.status_code, 400)
+
+        suspended = self.client.post(
+            url,
+            {"suspended": True, "reason": "Fraude confirmée après examen du dossier."},
+            format="json",
+        )
+        self.assertEqual(suspended.status_code, 200, suspended.content)
+        self.seller.refresh_from_db()
+        self.assertTrue(self.seller.is_suspended)
+        self.assertFalse(self.seller.is_active)
+
+        restored = self.client.post(
+            url,
+            {"suspended": False, "reason": "Compte rétabli après nouvel examen."},
+            format="json",
+        )
+        self.assertEqual(restored.status_code, 200, restored.content)
+        self.seller.refresh_from_db()
+        self.assertFalse(self.seller.is_suspended)
+        self.assertTrue(self.seller.is_active)
+        self.assertEqual(self.seller.moderation_history.count(), 2)
+
+    def test_suspended_account_cannot_send_rest_messages(self):
+        conversation = Conversation.objects.create()
+        ConversationParticipant.objects.create(conversation=conversation, user=self.buyer)
+        ConversationParticipant.objects.create(conversation=conversation, user=self.seller)
+        self.seller.is_suspended = True
+        self.seller.is_active = False
+        self.seller.save(update_fields=["is_suspended", "is_active"])
+        self.client.force_authenticate(self.seller)
+
+        response = self.client.post(
+            f"/api/v1/messaging/conversations/{conversation.id}/messages/",
+            {"content": "Je ne devrais pas pouvoir envoyer ceci."},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403, response.content)

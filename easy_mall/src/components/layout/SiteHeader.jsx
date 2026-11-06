@@ -21,7 +21,7 @@ function getNavLinks(isAuthenticated, isStaff) {
       { label: "Messages", to: "/messages" },
     );
   }
-  if (isStaff) links.push({ label: "Administration", to: "/statistiques" });
+  if (isStaff === true) links.push({ label: "Administration", to: "/moderation" });
   links.push({ label: "Comment ça marche", to: "/#comment-ca-marche" }, { label: "Aide", to: "/#faq" });
   return links;
 }
@@ -114,7 +114,7 @@ export function SiteHeader({ initialSearch = "" }) {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const notificationsRef = useRef(null);
-  const navLinks = getNavLinks(isAuthenticated, user?.is_staff);
+  const navLinks = getNavLinks(isAuthenticated, user?.is_staff === true);
 
   useEffect(() => {
     if (!isAuthenticated) {

@@ -26,6 +26,7 @@ class Notification(models.Model):
         PRODUCT_REPORTED = "product_reported", _("Annonce signalée")
         REPORT_DECISION = "report_decision", _("Décision de modération")
         DISPUTE_OPENED = "dispute_opened", _("Litige ouvert")
+        DISPUTE_UPDATE = "dispute_update", _("Mise à jour du litige")
         DISPUTE_RESOLVED = "dispute_resolved", _("Litige résolu")
         LISTING_SUSPENDED = "listing_suspended", _("Annonce suspendue")
         VERIFICATION_UPDATE = "verification_update", _("Mise à jour de vérification")

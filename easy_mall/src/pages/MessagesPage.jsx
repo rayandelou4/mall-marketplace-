@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowDown, ArrowLeft, Check, CheckCheck, MoreVertical, RefreshCw, Search, Send, MapPin, Trash2, X, Pencil, CornerUpLeft, Mic, Square, MessageCircle } from "lucide-react";
+import { ArrowDown, ArrowLeft, Check, CheckCheck, Flag, MoreVertical, RefreshCw, Search, Send, MapPin, Trash2, X, Pencil, CornerUpLeft, Mic, Square, MessageCircle } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { LoadingBlock, ErrorBlock, SectionHeading } from "../components/ui/StatusBlocks";
@@ -8,6 +8,7 @@ import { useTheme } from "../features/theme/ThemeContext";
 import { useAuth } from "../features/auth/AuthContext";
 import { clearMessages, deleteMessage, fetchConversations, fetchMessages, hideConversation, sendMessage, startConversation, updateMessage } from "../features/messaging/api";
 import { useConversationSocket } from "../features/messaging/useConversationSocket";
+import { createMessageReport } from "../features/moderation/api";
 import { createWhatsAppUrl } from "../lib/whatsapp";
 import { cx } from "../styles/theme";
 
@@ -85,6 +86,11 @@ export default function MessagesPage() {
   const [editingMessage, setEditingMessage] = useState(null);
   const [editClock, setEditClock] = useState(Date.now());
   const [replyTarget, setReplyTarget] = useState(null);
+  const [reportingMessageId, setReportingMessageId] = useState(null);
+  const [reportReason, setReportReason] = useState("inappropriate");
+  const [reportDescription, setReportDescription] = useState("");
+  const [reportNotice, setReportNotice] = useState(null);
+  const [reportBusy, setReportBusy] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -504,6 +510,27 @@ export default function MessagesPage() {
     }
   }
 
+  async function handleMessageReport(event) {
+    event.preventDefault();
+    if (!selectedMessage || reportingMessageId !== selectedMessage.id) return;
+    setReportBusy(true);
+    try {
+      await createMessageReport({
+        message_id: selectedMessage.id,
+        reason: reportReason,
+        description: reportDescription,
+      });
+      setReportNotice("Votre signalement a été transmis à l’équipe de modération.");
+      setReportingMessageId(null);
+      setReportDescription("");
+      setSelectedMessage(null);
+    } catch (error) {
+      setMessages((state) => ({ ...state, error: error.message }));
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
   async function handleHideConversation(conversation) {
     if (!window.confirm(`Supprimer la conversation avec ${conversation.other_username} de votre liste ? Elle restera visible par l'autre utilisateur.`)) return;
     try {
@@ -624,6 +651,8 @@ export default function MessagesPage() {
                 <button type="button" onClick={handleClearMessages} className={cx("rounded-full p-2", t.textMuted)} aria-label="Effacer la conversation pour moi" title="Effacer pour moi"><Trash2 className="h-4 w-4" /></button>
               </div>
 
+              {reportNotice && <p role="status" className="border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">{reportNotice}</p>}
+
               <div className="relative flex min-h-0 flex-1">
                 <div ref={scrollRef} onScroll={handleConversationScroll} className={cx("flex-1 overflow-y-auto p-4", t.surfaceAlt)}>
                   {messages.loading && <LoadingBlock t={t} />}
@@ -687,7 +716,30 @@ export default function MessagesPage() {
                     {selectedMessage.sender_username === user?.username && selectedMessage.content && !selectedMessage.is_deleted_for_all && isWithinEditWindow(selectedMessage, editClock) && <button type="button" onClick={() => { setEditingMessage(selectedMessage); setReplyTarget(null); setDraft(selectedMessage.content); setSelectedMessage(null); }} className={cx("flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs", t.border, t.textPrimary)}><Pencil className="h-3.5 w-3.5" /> Modifier</button>}
                     <button type="button" onClick={() => handleDeleteMessage("me")} className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs text-rose-600">Supprimer pour moi</button>
                     {selectedMessage.sender_username === user?.username && !selectedMessage.is_deleted_for_all && <button type="button" onClick={() => handleDeleteMessage("all")} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs text-white">Supprimer pour tous</button>}
+                    {selectedMessage.sender_username !== user?.username && !selectedMessage.is_deleted_for_all && <button type="button" onClick={() => { setReportingMessageId(selectedMessage.id); setReportReason("inappropriate"); setReportDescription(""); }} className={cx("flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs", t.border, t.textPrimary)}><Flag className="h-3.5 w-3.5" /> Signaler ce message</button>}
                   </div>
+                  {reportingMessageId === selectedMessage.id && (
+                    <form onSubmit={handleMessageReport} className={cx("mt-3 grid gap-3 border-t pt-3 sm:grid-cols-2", t.border)}>
+                      <label className={cx("grid gap-1 text-xs font-medium", t.textPrimary)}>
+                        Motif du signalement
+                        <select value={reportReason} onChange={(event) => setReportReason(event.target.value)} className={cx("rounded-lg border px-3 py-2 text-sm", t.inputBg, t.border, t.textPrimary)}>
+                          <option value="threat">Menace</option>
+                          <option value="inappropriate">Message inapproprié</option>
+                          <option value="harassment">Harcèlement</option>
+                          <option value="fraud">Fraude ou tentative d’arnaque</option>
+                          <option value="other">Autre motif</option>
+                        </select>
+                      </label>
+                      <label className={cx("grid gap-1 text-xs font-medium", t.textPrimary)}>
+                        Précisions (facultatif)
+                        <textarea value={reportDescription} onChange={(event) => setReportDescription(event.target.value)} rows={2} maxLength={2000} className={cx("rounded-lg border px-3 py-2 text-sm", t.inputBg, t.border, t.textPrimary)} />
+                      </label>
+                      <div className="flex gap-2 sm:col-span-2">
+                        <button type="submit" disabled={reportBusy} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60">{reportBusy ? "Envoi…" : "Envoyer le signalement"}</button>
+                        <button type="button" onClick={() => setReportingMessageId(null)} className={cx("rounded-lg border px-3 py-1.5 text-xs", t.border, t.textMuted)}>Annuler</button>
+                      </div>
+                    </form>
+                  )}
                 </div>
               )}
 

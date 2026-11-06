@@ -1,4 +1,4 @@
-import { apiRequest } from "../../lib/apiClient";
+import { apiDownload, apiRequest, unwrap } from "../../lib/apiClient";
 
 const ROOT = "/seller-verification";
 
@@ -13,3 +13,12 @@ export const uploadVerificationDocument = (requestId, payload) =>
 
 export const submitVerificationRequest = (requestId) =>
   apiRequest(`${ROOT}/requests/${requestId}/submit/`, { method: "POST", body: {} });
+
+export const fetchAdminVerificationRequests = () =>
+  apiRequest(`${ROOT}/admin/verification-requests/`).then(unwrap);
+
+export const reviewAdminVerificationRequest = (requestId, payload) =>
+  apiRequest(`${ROOT}/admin/verification-requests/${requestId}/review/`, { method: "POST", body: payload });
+
+export const downloadVerificationDocument = (documentId) =>
+  apiDownload(`${ROOT}/documents/${documentId}/download/`);

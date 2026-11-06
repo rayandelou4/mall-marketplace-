@@ -132,6 +132,8 @@ class ConversationStartSerializer(serializers.Serializer):
             recipient = User.objects.get(username=value)
         except User.DoesNotExist:
             raise serializers.ValidationError("Utilisateur introuvable.")
+        if not recipient.is_active or recipient.is_suspended:
+            raise serializers.ValidationError("Cet utilisateur ne peut pas recevoir de messages pour le moment.")
         if recipient == request.user:
             raise serializers.ValidationError("Impossible de démarrer une conversation avec vous-même.")
         self.recipient = recipient

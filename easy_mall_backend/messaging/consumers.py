@@ -19,6 +19,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 
+from accounts.models import User
 from .models import Conversation, Message
 from .serializers import message_channel_payload
 
@@ -29,7 +30,7 @@ class ConversationConsumer(AsyncWebsocketConsumer):
         self.group_name = f"conversation_{self.conversation_id}"
         user = self.scope.get("user")
 
-        if user is None or not user.is_authenticated:
+        if user is None or not user.is_authenticated or not user.is_active or user.is_suspended:
             await self.close(code=4001)  # non authentifié
             return
 
@@ -64,6 +65,10 @@ class ConversationConsumer(AsyncWebsocketConsumer):
             return
         if not isinstance(payload, dict):
             await self._send_message_error("Le format du message est invalide.")
+            return
+
+        if not await self._account_can_message(user.pk):
+            await self._send_message_error("Votre compte ne peut pas envoyer de messages actuellement.")
             return
         if not isinstance(payload, dict):
             await self._send_message_error("Le format du message est invalide.")
@@ -194,6 +199,10 @@ class ConversationConsumer(AsyncWebsocketConsumer):
             return Conversation.objects.filter(pk=self.conversation_id, participants__user=user).exists()
         except (ValueError, ValidationError):
             return False  # conversation_id n'est même pas un UUID valide
+
+    @database_sync_to_async
+    def _account_can_message(self, user_id):
+        return User.objects.filter(pk=user_id, is_active=True, is_suspended=False).exists()
 
     @database_sync_to_async
     def _mark_as_read(self, user):

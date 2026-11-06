@@ -31,6 +31,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
     order_created_at = serializers.DateTimeField(
         source="order.created_at", read_only=True
     )
+    shipping_address = serializers.CharField(
+        source="order.shipping_address", read_only=True
+    )
 
     class Meta:
         model = OrderItem
@@ -39,6 +42,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "order",
             "order_status",
             "order_created_at",
+            "shipping_address",
             "product",
             "product_title",
             "seller_username",

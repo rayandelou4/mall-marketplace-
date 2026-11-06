@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { Plus, Pencil, Trash2, Eye, Heart, Package, TrendingUp } from "lucide-react";
+import { Plus, Pencil, Trash2, Eye, Heart, Package, TrendingUp, MapPin } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { SectionHeading, LoadingBlock, ErrorBlock } from "../components/ui/StatusBlocks";
@@ -245,7 +245,15 @@ export default function SellerDashboardPage() {
             <div className="flex flex-col gap-3">
               {sortedSales.map((item) => (
                 <div key={item.id} className={cx("flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-4 text-sm", t.cardBorder, t.cardBg)}>
-                  <span className={cx("min-w-35 flex-1", t.textPrimary)}>{item.product_title} × {item.quantity}</span>
+                  <div className="min-w-35 flex-1">
+                    <p className={cx("font-medium", t.textPrimary)}>{item.product_title} × {item.quantity}</p>
+                    {item.shipping_address && (
+                      <p className={cx("mt-1 flex items-start gap-1 text-xs", t.textMuted)}>
+                        <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span className="wrap-break-word">{item.shipping_address}</span>
+                      </p>
+                    )}
+                  </div>
                   <span className={cx("text-xs", t.textMuted)}>{item.order_status === "pending" && item.payment_method === "cash" ? "En attente de remise" : item.order_status}</span>
                   <span className="font-mono">{formatPrice(item.subtotal, item.currency)}</span>
                   {["delivered", "cancelled"].includes(item.order_status) && (

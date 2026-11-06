@@ -31,6 +31,11 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
+class ActiveAccountPermission(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.is_active and not request.user.is_suspended
+
+
 def broadcast_message(conversation, message):
     async_to_sync(get_channel_layer().group_send)(
         f"conversation_{conversation.id}",
@@ -59,7 +64,7 @@ def upload_voice_file(uploaded_file):
 
 class ConversationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ConversationSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [ActiveAccountPermission]
     throttle_classes = [ScopedRateThrottle]
 
     def get_queryset(self):

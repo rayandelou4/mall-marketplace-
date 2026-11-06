@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { MapPin, Star, Package, ShoppingBag, Settings, Heart } from "lucide-react";
+import { MapPin, Star, Package, ShoppingBag, Settings, Heart, MessageCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
@@ -149,20 +149,28 @@ export default function ProfilePage() {
                 </Link>
               )}
               {isAuthenticated && user?.username !== profile.username && (
-                <button
-                  type="button"
-                  onClick={handleToggleSellerFavorite}
-                  disabled={state.favoriteSaving}
-                  className={cx(
-                    "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold disabled:opacity-60",
-                    t.border,
-                    state.sellerFavorite ? "text-rose-600" : t.textPrimary,
-                    !user && "sm:ml-auto"
-                  )}
-                >
-                  <Heart className={cx("h-4 w-4", state.sellerFavorite && "fill-current")} />
-                  {state.sellerFavorite ? "Retirer des favoris" : "Suivre ce vendeur"}
-                </button>
+                <div className="flex flex-wrap gap-2 sm:ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => navigate("/messages", { state: { startWith: { username: profile.username } } })}
+                    className="inline-flex items-center gap-2 rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                  >
+                    <MessageCircle className="h-4 w-4" /> Contacter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleToggleSellerFavorite}
+                    disabled={state.favoriteSaving}
+                    className={cx(
+                      "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold disabled:opacity-60",
+                      t.border,
+                      state.sellerFavorite ? "text-rose-600" : t.textPrimary
+                    )}
+                  >
+                    <Heart className={cx("h-4 w-4", state.sellerFavorite && "fill-current")} />
+                    {state.sellerFavorite ? "Retirer des favoris" : "Suivre ce vendeur"}
+                  </button>
+                </div>
               )}
             </div>
 

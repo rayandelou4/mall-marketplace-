@@ -12,6 +12,8 @@ app_name = "moderation"
 router = DefaultRouter()
 router.register("reports", views.ProductReportViewSet, basename="report")
 router.register("disputes", views.DisputeViewSet, basename="dispute")
+router.register("message-reports", views.MessageReportViewSet, basename="message-report")
+router.register("accounts", views.AccountModerationViewSet, basename="account-moderation")
 
 urlpatterns = [
     path("", include(router.urls)),

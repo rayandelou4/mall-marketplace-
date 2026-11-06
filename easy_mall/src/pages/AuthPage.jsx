@@ -378,8 +378,10 @@ export default function AuthPage() {
   // que la personne ne continue elle-même — pas de vérification bloquante
   // avant d'accéder à l'app (email seulement désormais, pas de code à saisir).
   useEffect(() => {
-    if (isAuthenticated && mode !== "registered") navigate("/", { replace: true });
-  }, [isAuthenticated, mode, navigate]);
+    if (isAuthenticated && mode !== "registered" && !(mode === "verify-email" && pendingVerification)) {
+      navigate("/", { replace: true });
+    }
+  }, [isAuthenticated, mode, navigate, pendingVerification]);
 
   // Compatibilité avec l'ancien lien d'inscription : si un code est passé via un paramètre legacy,
   // on ouvre aussi l'écran de vérification, mais le flux actuel demande une saisie manuelle.
@@ -453,6 +455,17 @@ export default function AuthPage() {
     }
   }
 
+  async function handleConfirmEmail(values) {
+    try {
+      await confirmEmail(values);
+      if (values.email && values.password) {
+        navigate("/inscription/adresse", { replace: true });
+      }
+    } catch {
+      /* authError déjà affichée */
+    }
+  }
+
   return (
     <AuthShell t={t} isDark={isDark} onToggleTheme={toggleTheme} title={SCREENS[mode].title} subtitle={SCREENS[mode].subtitle}>
       {authError && <Alert type="error">{authError}</Alert>}
@@ -496,7 +509,7 @@ export default function AuthPage() {
           loading={authLoading}
           initialEmail={pendingVerification?.email || ""}
           initialPassword={pendingVerification?.password || ""}
-          onSubmit={confirmEmail}
+          onSubmit={handleConfirmEmail}
           onResend={handleResendVerification}
           resendCooldown={30}
         />

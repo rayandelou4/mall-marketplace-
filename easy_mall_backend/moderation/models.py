@@ -160,3 +160,79 @@ class Dispute(models.Model):
 
     def __str__(self):
         return f"Litige {self.id} — {self.get_status_display()}"
+
+
+class MessageReport(models.Model):
+    class Reason(models.TextChoices):
+        THREAT = "threat", _("Menace")
+        INAPPROPRIATE = "inappropriate", _("Message inapproprié")
+        HARASSMENT = "harassment", _("Harcèlement")
+        FRAUD = "fraud", _("Fraude ou tentative d'arnaque")
+        OTHER = "other", _("Autre motif")
+
+    class Status(models.TextChoices):
+        NEW = "new", _("Nouveau")
+        UNDER_REVIEW = "under_review", _("En cours d'examen")
+        VALID = "valid", _("Fondé")
+        REJECTED = "rejected", _("Rejeté")
+        CLOSED = "closed", _("Clôturé")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    message = models.ForeignKey(
+        "messaging.Message", on_delete=models.SET_NULL, null=True, blank=True, related_name="reports"
+    )
+    conversation = models.ForeignKey(
+        "messaging.Conversation", on_delete=models.SET_NULL, null=True, blank=True, related_name="message_reports"
+    )
+    reporter = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="message_reports_filed"
+    )
+    reported_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="message_reports_received"
+    )
+    reported_username = models.CharField(max_length=50)
+    message_snapshot = models.JSONField(default=dict, blank=True)
+    reason = models.CharField(max_length=24, choices=Reason.choices)
+    description = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.NEW)
+    review_notes = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="message_reports_reviewed"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "message_reports"
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["message", "reporter"],
+                condition=models.Q(status__in=["new", "under_review", "valid"]),
+                name="unique_active_message_report_per_user",
+            )
+        ]
+
+    def __str__(self):
+        return f"Signalement de message {self.id} — {self.get_reason_display()}"
+
+
+class AccountModerationAction(models.Model):
+    class Action(models.TextChoices):
+        SUSPENDED = "suspended", _("Compte suspendu")
+        REINSTATED = "reinstated", _("Compte rétabli")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="moderation_history"
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="account_moderation_actions"
+    )
+    action = models.CharField(max_length=12, choices=Action.choices)
+    reason = models.TextField()
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "account_moderation_actions"
+        ordering = ["-created_at"]
