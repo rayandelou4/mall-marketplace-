@@ -1,25 +1,28 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider, useAuth } from "./features/auth/AuthContext";
 import { ThemeProvider } from "./features/theme/ThemeContext";
 import { CartProvider } from "./features/cart/CartContext";
-import HomePage from "./pages/HomePage";
-import AuthPage from "./pages/AuthPage";
-import CatalogPage from "./pages/CatalogPage";
-import ProductPage from "./pages/ProductPage";
-import CartPage from "./pages/CartPage";
-import CheckoutPage from "./pages/CheckoutPage";
-import SellerDashboardPage from "./pages/SellerDashboardPage";
-import ListingFormPage from "./pages/ListingFormPage";
-import OrdersPage from "./pages/OrdersPage";
-import MessagesPage from "./pages/MessagesPage";
-import AdminStatsPage from "./pages/AdminStatsPage";
-import AdminModerationPage from "./pages/AdminModerationPage";
-import ProfilePage from "./pages/ProfilePage";
-import SettingsPage from "./pages/SettingsPage";
-import FavoritesPage from "./pages/FavoritesPage";
-import NotificationsPage from "./pages/NotificationsPage";
-import SignupAddressPage from "./pages/SignupAddressPage";
+
+const HomePage = lazy(() => import("./pages/HomePage"));
+const AuthPage = lazy(() => import("./pages/AuthPage"));
+const CatalogPage = lazy(() => import("./pages/CatalogPage"));
+const ProductPage = lazy(() => import("./pages/ProductPage"));
+const CartPage = lazy(() => import("./pages/CartPage"));
+const CheckoutPage = lazy(() => import("./pages/CheckoutPage"));
+const SellerDashboardPage = lazy(() => import("./pages/SellerDashboardPage"));
+const ListingFormPage = lazy(() => import("./pages/ListingFormPage"));
+const OrdersPage = lazy(() => import("./pages/OrdersPage"));
+const MessagesPage = lazy(() => import("./pages/MessagesPage"));
+const AdminStatsPage = lazy(() => import("./pages/AdminStatsPage"));
+const AdminModerationPage = lazy(() => import("./pages/AdminModerationPage"));
+const ProfilePage = lazy(() => import("./pages/ProfilePage"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const FavoritesPage = lazy(() => import("./pages/FavoritesPage"));
+const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
+const SignupAddressPage = lazy(() => import("./pages/SignupAddressPage"));
+const HelpPage = lazy(() => import("./pages/HelpPage"));
+const TermsPage = lazy(() => import("./pages/TermsPage"));
 
 function AppRoutes() {
   const { bootstrapping } = useAuth();
@@ -35,6 +38,7 @@ function AppRoutes() {
   }
 
   return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm text-zinc-500">Chargement…</div>}>
     <Routes>
       <Route path="/" element={<HomePage />} />
       <Route path="/auth" element={<AuthPage />} />
@@ -56,7 +60,10 @@ function AppRoutes() {
       <Route path="/vendeurs/:username" element={<ProfilePage />} />
       <Route path="/profil/:username" element={<ProfilePage />} />
       <Route path="/parametres" element={<SettingsPage />} />
+      <Route path="/aide" element={<HelpPage />} />
+      <Route path="/conditions" element={<TermsPage />} />
     </Routes>
+    </Suspense>
   );
 }
 

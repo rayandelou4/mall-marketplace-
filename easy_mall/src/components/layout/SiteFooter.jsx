@@ -1,4 +1,5 @@
 import React from "react";
+import { Link } from "react-router-dom";
 import { FaInstagram, FaFacebook, FaTwitter } from "react-icons/fa";
 import { cx } from "../../styles/theme";
 import { API_BASE_URL } from "../../lib/apiClient";
@@ -28,7 +29,7 @@ export function SiteFooter({ t }) {
             <div key={col.title}>
               <p className={cx("text-sm font-semibold", t.textPrimary)}>{col.title}</p>
               <ul className="mt-3 flex flex-col gap-2">
-                {col.links.map((link) => <li key={link}><a href="#" className={cx("text-sm", t.textMuted)}>{link}</a></li>)}
+                {col.links.map((link) => <li key={link}><Link to={link === "Centre d'aide" ? "/aide" : link === "Conditions d'utilisation" ? "/conditions" : "#"} className={cx("text-sm", t.textMuted)}>{link}</Link></li>)}
               </ul>
             </div>
           ))}

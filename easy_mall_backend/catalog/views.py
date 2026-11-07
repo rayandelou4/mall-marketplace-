@@ -16,6 +16,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from accounts.models import User
@@ -312,10 +313,16 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.AllowAny]
 
 
+class ProductPagination(PageNumberPagination):
+    page_size_query_param = "page_size"
+    max_page_size = 20
+
+
 class ProductViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, ProductOrderingFilter]
     filterset_class = ProductFilter
+    pagination_class = ProductPagination
     search_fields = ["title", "description", "category__name"]
     ordering_fields = ["price", "created_at", "views_count"]
     ordering = ["-created_at"]

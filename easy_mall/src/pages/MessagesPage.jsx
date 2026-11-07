@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowDown, ArrowLeft, Check, CheckCheck, Flag, MoreVertical, RefreshCw, Search, Send, MapPin, Trash2, X, Pencil, CornerUpLeft, Mic, Square, MessageCircle } from "lucide-react";
+import { ArrowDown, ArrowLeft, Check, CheckCheck, CheckSquare, Flag, MoreVertical, RefreshCw, Search, Send, MapPin, Trash2, X, Pencil, CornerUpLeft, Mic, Square, MessageCircle } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { LoadingBlock, ErrorBlock, SectionHeading } from "../components/ui/StatusBlocks";
@@ -83,6 +83,8 @@ export default function MessagesPage() {
   const [conversationSearch, setConversationSearch] = useState("");
   const [sending, setSending] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState(null);
+  const [selectedMessageIds, setSelectedMessageIds] = useState(new Set());
+  const [selectionMode, setSelectionMode] = useState(false);
   const [editingMessage, setEditingMessage] = useState(null);
   const [editClock, setEditClock] = useState(Date.now());
   const [replyTarget, setReplyTarget] = useState(null);
@@ -98,6 +100,7 @@ export default function MessagesPage() {
   const scrollRef = useRef(null);
   const latestMessageRef = useRef(null);
   const scrollAnchorRef = useRef(null);
+  const headerMenuRef = useRef(null);
   const stickToBottomRef = useRef(true);
   const readMessageIdsRef = useRef(new Set());
   const recorderRef = useRef(null);
@@ -250,6 +253,7 @@ export default function MessagesPage() {
       const hiddenIds = new Set(message.message_ids);
       setMessages((state) => ({ ...state, items: state.items.filter((item) => !hiddenIds.has(item.id)) }));
       setSelectedMessage((selected) => selected && hiddenIds.has(selected.id) ? null : selected);
+      setSelectedMessageIds((ids) => new Set([...ids].filter((id) => !hiddenIds.has(String(id)))));
       loadConversations({ silent: true });
       return;
     }
@@ -480,23 +484,44 @@ export default function MessagesPage() {
     }
   }
 
-  async function handleDeleteMessage(scope) {
-    if (!selectedMessage || !activeId) return;
+  async function handleDeleteMessage(message, scope) {
+    if (!message || !activeId) return;
     const label = scope === "all" ? "supprimer ce message pour tous" : "supprimer ce message pour vous";
     if (!window.confirm(`Voulez-vous vraiment ${label} ?`)) return;
     try {
-      await deleteMessage(activeId, selectedMessage.id, scope);
+      await deleteMessage(activeId, message.id, scope);
       setMessages((state) => ({
         ...state,
         items: scope === "all"
-          ? state.items.map((item) => item.id === selectedMessage.id ? { ...item, content: "Ce message a été supprimé", image_url: null, voice_url: null, location_lat: null, location_lng: null, is_deleted_for_all: true } : item)
-          : state.items.filter((item) => item.id !== selectedMessage.id),
+          ? state.items.map((item) => item.id === message.id ? { ...item, content: "Ce message a été supprimé", image_url: null, voice_url: null, location_lat: null, location_lng: null, is_deleted_for_all: true } : item)
+          : state.items.filter((item) => item.id !== message.id),
       }));
-          loadConversations({ silent: true });
+      loadConversations({ silent: true });
       setSelectedMessage(null);
+      setSelectedMessageIds((ids) => new Set([...ids].filter((id) => String(id) !== String(message.id))));
     } catch (err) {
       window.alert(err.message);
     }
+  }
+
+  async function handleBulkDeleteMessages(scope) {
+    if (!activeId || selectedMessageIds.size === 0) return;
+    const selected = messages.items.filter((message) => selectedMessageIds.has(message.id));
+    const label = scope === "all" ? "pour tous" : "pour vous";
+    if (!window.confirm(`Supprimer ${selected.length} message${selected.length > 1 ? "s" : ""} ${label} ?`)) return;
+    const results = await Promise.allSettled(selected.map((message) => deleteMessage(activeId, message.id, scope)));
+    const successfulIds = new Set(selected.filter((_, index) => results[index].status === "fulfilled").map((message) => String(message.id)));
+    setMessages((state) => ({
+      ...state,
+      items: scope === "all"
+        ? state.items.map((item) => successfulIds.has(String(item.id)) ? { ...item, content: "Ce message a été supprimé", image_url: null, voice_url: null, location_lat: null, location_lng: null, is_deleted_for_all: true } : item)
+        : state.items.filter((item) => !successfulIds.has(String(item.id))),
+    }));
+    setSelectedMessageIds(new Set());
+    setSelectionMode(false);
+    loadConversations({ silent: true });
+    const failedCount = results.length - successfulIds.size;
+    if (failedCount) window.alert(`${failedCount} message${failedCount > 1 ? "s n’ont" : " n’a"} pas pu être supprimé${failedCount > 1 ? "s" : ""}.`);
   }
 
   async function handleClearMessages() {
@@ -546,6 +571,9 @@ export default function MessagesPage() {
   }
 
   const activeConversation = conversations.items.find((c) => c.id === activeId);
+  const selectedMessages = messages.items.filter((message) => selectedMessageIds.has(message.id));
+  const canDeleteSelectedForAll = selectedMessages.length > 0
+    && selectedMessages.every((message) => message.sender_username === user?.username && !message.is_deleted_for_all);
   const showThread = Boolean(activeId || startWith);
   const filteredConversations = conversations.items.filter((conversation) => {
     const query = conversationSearch.trim().toLowerCase();
@@ -606,9 +634,6 @@ export default function MessagesPage() {
                       </span>
                     </span>
                   </button>
-                  <button type="button" onClick={() => handleHideConversation(c)} className={cx("shrink-0 rounded-full p-2 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950", t.textMuted)} aria-label={`Supprimer la conversation avec ${c.other_username} pour moi`} title="Supprimer pour moi">
-                    <Trash2 className="h-4 w-4" />
-                  </button>
                 </div>
               ))}
             </div>
@@ -647,8 +672,28 @@ export default function MessagesPage() {
                   )}
                 </span>
                 {activeId && <span className={cx("h-2.5 w-2.5 rounded-full", connected ? "bg-emerald-500" : "animate-pulse bg-amber-400")} title={connected ? "Messagerie en temps réel" : "Synchronisation de secours active"} />}
-                {whatsappUrl && <a href={whatsappUrl} target="_blank" rel="noopener noreferrer" className="flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700" aria-label={`Contacter ${contactName} sur WhatsApp`}><MessageCircle className="h-4 w-4" /><span className="hidden sm:inline">WhatsApp</span></a>}
-                <button type="button" onClick={handleClearMessages} className={cx("rounded-full p-2", t.textMuted)} aria-label="Effacer la conversation pour moi" title="Effacer pour moi"><Trash2 className="h-4 w-4" /></button>
+                <details ref={headerMenuRef} className="relative shrink-0">
+                  <summary className={cx("flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-full border", t.border, t.textMuted)} aria-label="Fonctionnalités de la conversation">
+                    <MoreVertical className="h-5 w-5" />
+                  </summary>
+                  <div className={cx("absolute right-0 top-full z-20 mt-2 grid min-w-60 gap-1 rounded-xl border p-2 shadow-xl", t.cardBg, t.cardBorder)}>
+                    <button type="button" onClick={() => { setSelectionMode((enabled) => !enabled); if (selectionMode) setSelectedMessageIds(new Set()); headerMenuRef.current?.removeAttribute("open"); }} className={cx("rounded-lg px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5", t.textPrimary)}>
+                      {selectionMode ? "Terminer la sélection" : "Sélectionner des messages"}
+                    </button>
+                    {selectionMode && <>
+                      <p className={cx("px-3 py-1 text-xs", t.textMuted)}>{selectedMessageIds.size} message{selectedMessageIds.size > 1 ? "s" : ""} sélectionné{selectedMessageIds.size > 1 ? "s" : ""}</p>
+                      <button type="button" disabled={!selectedMessageIds.size} onClick={() => { headerMenuRef.current?.removeAttribute("open"); handleBulkDeleteMessages("me"); }} className="rounded-lg px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 disabled:opacity-50 dark:hover:bg-rose-950">
+                        Supprimer la sélection pour moi
+                      </button>
+                      {canDeleteSelectedForAll && <button type="button" onClick={() => { headerMenuRef.current?.removeAttribute("open"); handleBulkDeleteMessages("all"); }} className="rounded-lg px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950">
+                        Supprimer la sélection pour tous
+                      </button>}
+                    </>}
+                    {whatsappUrl && <a href={whatsappUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950"><MessageCircle className="h-4 w-4" /> Contacter sur WhatsApp</a>}
+                    {activeId && <button type="button" onClick={() => { headerMenuRef.current?.removeAttribute("open"); handleClearMessages(); }} className={cx("flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5", t.textPrimary)}><Trash2 className="h-4 w-4" /> Effacer tous les messages</button>}
+                    {activeConversation && <button type="button" onClick={() => { headerMenuRef.current?.removeAttribute("open"); handleHideConversation(activeConversation); }} className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950"><Trash2 className="h-4 w-4" /> Supprimer la conversation</button>}
+                  </div>
+                </details>
               </div>
 
               {reportNotice && <p role="status" className="border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">{reportNotice}</p>}
@@ -666,8 +711,16 @@ export default function MessagesPage() {
                     const previousMessage = messages.items[index - 1];
                     return <div key={m.id}>
                       {(!previousMessage || !isSameDay(previousMessage.created_at, m.created_at)) && <div className="my-4 text-center"><span className={cx("rounded-full px-3 py-1 text-[11px] shadow-sm", t.cardBg, t.textMuted)}>{formatDay(m.created_at)}</span></div>}
-                      <div className={cx("group mb-2 flex items-end gap-1", ownMessage ? "justify-end" : "justify-start")}>
-                        {ownMessage && <button type="button" onClick={() => setSelectedMessage(m)} className={cx("rounded-full p-1 sm:invisible sm:group-hover:visible", t.textMuted)} aria-label="Options du message"><MoreVertical className="h-3.5 w-3.5" /></button>}
+                      <div className={cx("group mb-1 flex items-end gap-1", ownMessage ? "justify-end" : "justify-start")}>
+                        {selectionMode && <button type="button" onClick={() => setSelectedMessageIds((ids) => {
+                          const next = new Set(ids);
+                          if (next.has(m.id)) next.delete(m.id);
+                          else if (!m.is_deleted_for_all) next.add(m.id);
+                          return next;
+                        })} disabled={m.is_deleted_for_all} className={cx("rounded p-1 disabled:opacity-40", t.textMuted)} aria-label={`${selectedMessageIds.has(m.id) ? "Désélectionner" : "Sélectionner"} le message`}>
+                          {selectedMessageIds.has(m.id) ? <CheckSquare className="h-4 w-4 text-indigo-600" /> : <span className="block h-4 w-4 rounded border" />}
+                        </button>}
+                        {ownMessage && !selectionMode && <button type="button" onClick={() => setSelectedMessage(selectedMessage?.id === m.id ? null : m)} className={cx("rounded-full p-1 opacity-70 transition-opacity hover:opacity-100", t.textMuted)} aria-label="Options du message"><MoreVertical className="h-3.5 w-3.5" /></button>}
                         <div
                           className={cx(
                             "max-w-[82%] rounded-2xl px-3.5 py-2 text-sm shadow-sm sm:max-w-[70%]",
@@ -686,8 +739,29 @@ export default function MessagesPage() {
                             {ownMessage && (m.is_read ? <CheckCheck className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />)}
                           </span>
                         </div>
-                        {!ownMessage && <button type="button" onClick={() => setSelectedMessage(m)} className={cx("rounded-full p-1 sm:invisible sm:group-hover:visible", t.textMuted)} aria-label="Options du message"><MoreVertical className="h-3.5 w-3.5" /></button>}
+                        {!ownMessage && !selectionMode && <button type="button" onClick={() => setSelectedMessage(selectedMessage?.id === m.id ? null : m)} className={cx("rounded-full p-1 opacity-70 transition-opacity hover:opacity-100", t.textMuted)} aria-label="Options du message"><MoreVertical className="h-3.5 w-3.5" /></button>}
                       </div>
+                      {selectedMessage?.id === m.id && !selectionMode && <div className={cx("mb-3 flex", ownMessage ? "justify-end pr-7" : "justify-start pl-7")}>
+                        <div className={cx("max-w-[90%] rounded-lg border p-3", t.border, t.cardBg)}>
+                          <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => { setReplyTarget(m); setEditingMessage(null); setSelectedMessage(null); }} className={cx("flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs", t.border, t.textPrimary)}><CornerUpLeft className="h-3.5 w-3.5" /> Répondre</button>
+                            {ownMessage && m.content && !m.is_deleted_for_all && isWithinEditWindow(m, editClock) && <button type="button" onClick={() => { setEditingMessage(m); setReplyTarget(null); setDraft(m.content); setSelectedMessage(null); }} className={cx("flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs", t.border, t.textPrimary)}><Pencil className="h-3.5 w-3.5" /> Modifier</button>}
+                            {!m.is_deleted_for_all && <button type="button" onClick={() => handleDeleteMessage(m, "me")} className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs text-rose-600">Supprimer pour moi</button>}
+                            {ownMessage && !m.is_deleted_for_all && <button type="button" onClick={() => handleDeleteMessage(m, "all")} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs text-white">Supprimer pour tous</button>}
+                            {!ownMessage && !m.is_deleted_for_all && <button type="button" onClick={() => { setReportingMessageId(m.id); setReportReason("inappropriate"); setReportDescription(""); }} className={cx("flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs", t.border, t.textPrimary)}><Flag className="h-3.5 w-3.5" /> Signaler ce message</button>}
+                          </div>
+                          {reportingMessageId === m.id && <form onSubmit={handleMessageReport} className={cx("mt-3 grid gap-3 border-t pt-3 sm:grid-cols-2", t.border)}>
+                            <label className={cx("grid gap-1 text-xs font-medium", t.textPrimary)}>
+                              Motif du signalement
+                              <select value={reportReason} onChange={(event) => setReportReason(event.target.value)} className={cx("rounded-lg border px-3 py-2 text-sm", t.inputBg, t.border, t.textPrimary)}>
+                                <option value="threat">Menace</option><option value="inappropriate">Message inapproprié</option><option value="harassment">Harcèlement</option><option value="fraud">Fraude ou tentative d’arnaque</option><option value="other">Autre motif</option>
+                              </select>
+                            </label>
+                            <label className={cx("grid gap-1 text-xs font-medium", t.textPrimary)}>Précisions (facultatif)<textarea value={reportDescription} onChange={(event) => setReportDescription(event.target.value)} rows={2} maxLength={2000} className={cx("rounded-lg border px-3 py-2 text-sm", t.inputBg, t.border, t.textPrimary)} /></label>
+                            <div className="flex gap-2 sm:col-span-2"><button type="submit" disabled={reportBusy} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60">{reportBusy ? "Envoi…" : "Envoyer le signalement"}</button><button type="button" onClick={() => setReportingMessageId(null)} className={cx("rounded-lg border px-3 py-1.5 text-xs", t.border, t.textMuted)}>Annuler</button></div>
+                          </form>}
+                        </div>
+                      </div>}
                     </div>;
                   })}
                   <div ref={latestMessageRef} />
@@ -704,44 +778,6 @@ export default function MessagesPage() {
                   </button>
                 )}
               </div>
-
-              {selectedMessage && (
-                <div className={cx("border-t p-3", t.border, t.cardBg)}>
-                  <div className="flex items-center justify-between gap-3">
-                    <p className={cx("truncate text-xs", t.textMuted)}>{selectedMessage.content || "Message multimédia"}</p>
-                    <button type="button" onClick={() => setSelectedMessage(null)} className={cx("rounded-full p-1", t.textMuted)} aria-label="Fermer"><X className="h-4 w-4" /></button>
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <button type="button" onClick={() => { setReplyTarget(selectedMessage); setEditingMessage(null); setSelectedMessage(null); }} className={cx("flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs", t.border, t.textPrimary)}><CornerUpLeft className="h-3.5 w-3.5" /> Répondre</button>
-                    {selectedMessage.sender_username === user?.username && selectedMessage.content && !selectedMessage.is_deleted_for_all && isWithinEditWindow(selectedMessage, editClock) && <button type="button" onClick={() => { setEditingMessage(selectedMessage); setReplyTarget(null); setDraft(selectedMessage.content); setSelectedMessage(null); }} className={cx("flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs", t.border, t.textPrimary)}><Pencil className="h-3.5 w-3.5" /> Modifier</button>}
-                    <button type="button" onClick={() => handleDeleteMessage("me")} className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs text-rose-600">Supprimer pour moi</button>
-                    {selectedMessage.sender_username === user?.username && !selectedMessage.is_deleted_for_all && <button type="button" onClick={() => handleDeleteMessage("all")} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs text-white">Supprimer pour tous</button>}
-                    {selectedMessage.sender_username !== user?.username && !selectedMessage.is_deleted_for_all && <button type="button" onClick={() => { setReportingMessageId(selectedMessage.id); setReportReason("inappropriate"); setReportDescription(""); }} className={cx("flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs", t.border, t.textPrimary)}><Flag className="h-3.5 w-3.5" /> Signaler ce message</button>}
-                  </div>
-                  {reportingMessageId === selectedMessage.id && (
-                    <form onSubmit={handleMessageReport} className={cx("mt-3 grid gap-3 border-t pt-3 sm:grid-cols-2", t.border)}>
-                      <label className={cx("grid gap-1 text-xs font-medium", t.textPrimary)}>
-                        Motif du signalement
-                        <select value={reportReason} onChange={(event) => setReportReason(event.target.value)} className={cx("rounded-lg border px-3 py-2 text-sm", t.inputBg, t.border, t.textPrimary)}>
-                          <option value="threat">Menace</option>
-                          <option value="inappropriate">Message inapproprié</option>
-                          <option value="harassment">Harcèlement</option>
-                          <option value="fraud">Fraude ou tentative d’arnaque</option>
-                          <option value="other">Autre motif</option>
-                        </select>
-                      </label>
-                      <label className={cx("grid gap-1 text-xs font-medium", t.textPrimary)}>
-                        Précisions (facultatif)
-                        <textarea value={reportDescription} onChange={(event) => setReportDescription(event.target.value)} rows={2} maxLength={2000} className={cx("rounded-lg border px-3 py-2 text-sm", t.inputBg, t.border, t.textPrimary)} />
-                      </label>
-                      <div className="flex gap-2 sm:col-span-2">
-                        <button type="submit" disabled={reportBusy} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60">{reportBusy ? "Envoi…" : "Envoyer le signalement"}</button>
-                        <button type="button" onClick={() => setReportingMessageId(null)} className={cx("rounded-lg border px-3 py-1.5 text-xs", t.border, t.textMuted)}>Annuler</button>
-                      </div>
-                    </form>
-                  )}
-                </div>
-              )}
 
               <form onSubmit={handleSend} className={cx("flex items-end gap-2 border-t p-3", t.border)}>
                 {(replyTarget || editingMessage) && <div className={cx("flex items-center justify-between gap-3 border-t px-3 py-2 text-xs", t.cardBg, t.border)}><span className={cx("truncate", t.textMuted)}>{editingMessage ? `Modification : ${editingMessage.content}` : `Réponse à ${replyTarget.sender_username} : ${replyTarget.content}`}</span><button type="button" onClick={() => { setReplyTarget(null); setEditingMessage(null); setDraft(""); }} aria-label="Annuler"><X className="h-4 w-4" /></button></div>}

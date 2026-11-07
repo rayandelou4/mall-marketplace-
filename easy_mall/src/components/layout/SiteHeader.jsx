@@ -22,7 +22,7 @@ function getNavLinks(isAuthenticated, isStaff) {
     );
   }
   if (isStaff === true) links.push({ label: "Administration", to: "/moderation" });
-  links.push({ label: "Comment ça marche", to: "/#comment-ca-marche" }, { label: "Aide", to: "/#faq" });
+  links.push({ label: "Comment ça marche", to: "/#comment-ca-marche" }, { label: "Aide", to: "/aide" });
   return links;
 }
 

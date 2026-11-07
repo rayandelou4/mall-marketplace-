@@ -102,6 +102,9 @@ export default function MallHomePage() {
   const { t } = useTheme();
   const { isAuthenticated } = useAuth();
   const [openFaq, setOpenFaq] = useState(0);
+  const popularSectionsRef = useRef(null);
+  const [popularLoading, setPopularLoading] = useState(false);
+  const [popularLoaded, setPopularLoaded] = useState(false);
   const [data, setData] = useState({ loading: true, error: null, categories: [], recentProducts: [], recentServices: [], popularProducts: [], popularServices: [] });
 
   useEffect(() => {
@@ -110,13 +113,11 @@ export default function MallHomePage() {
       try {
         const results = await Promise.allSettled([
           fetchCategories(),
-          fetchProducts({ item_type: "product", ordering: "-created_at" }),
-          fetchProducts({ item_type: "service", ordering: "-created_at" }),
-          fetchProducts({ item_type: "product", ordering: "-views_count" }),
-          fetchProducts({ item_type: "service", ordering: "-views_count" }),
+          fetchProducts({ item_type: "product", ordering: "-created_at", page_size: 8 }),
+          fetchProducts({ item_type: "service", ordering: "-created_at", page_size: 8 }),
         ]);
         if (cancelled) return;
-        const [categories, recentProducts, recentServices, popularProducts, popularServices] = results.map(
+        const [categories, recentProducts, recentServices] = results.map(
           (result) => result.status === "fulfilled" ? result.value : []
         );
         const failedRequest = results.find((result) => result.status === "rejected");
@@ -126,8 +127,8 @@ export default function MallHomePage() {
           categories,
           recentProducts,
           recentServices,
-          popularProducts,
-          popularServices,
+          popularProducts: [],
+          popularServices: [],
         });
       } catch (err) {
         if (!cancelled) setData((s) => ({ ...s, loading: false, error: err.message }));
@@ -135,6 +136,55 @@ export default function MallHomePage() {
     }
     load();
     return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const section = popularSectionsRef.current;
+    if (!section) return undefined;
+
+    let cancelled = false;
+    let started = false;
+    const loadPopular = async () => {
+      if (started) return;
+      started = true;
+      setPopularLoading(true);
+      const results = await Promise.allSettled([
+        fetchProducts({ item_type: "product", ordering: "-views_count", page_size: 8 }),
+        fetchProducts({ item_type: "service", ordering: "-views_count", page_size: 8 }),
+      ]);
+      if (cancelled) return;
+
+      const [popularProducts, popularServices] = results.map(
+        (result) => result.status === "fulfilled" ? result.value : []
+      );
+      const failedRequest = results.find((result) => result.status === "rejected");
+      setData((current) => ({
+        ...current,
+        popularProducts,
+        popularServices,
+        error: failedRequest ? `Certaines sections n’ont pas pu être chargées : ${failedRequest.reason?.message || "erreur réseau"}` : current.error,
+      }));
+      setPopularLoading(false);
+      setPopularLoaded(true);
+    };
+
+    if (!("IntersectionObserver" in window)) {
+      loadPopular();
+      return () => { cancelled = true; };
+    }
+
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        observer.disconnect();
+        loadPopular();
+      }
+    }, { rootMargin: "400px" });
+    observer.observe(section);
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
   }, []);
 
   async function handleToggleFavorite(product) {
@@ -241,9 +291,10 @@ export default function MallHomePage() {
         </div>
       </section>
 
+      <div ref={popularSectionsRef}>
       <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6">
         <SectionHeading eyebrow="Les plus consultés" title="Produits populaires" t={t} />
-        {loading ? <LoadingBlock t={t} /> : popularProducts.length === 0 ? (
+        {loading || popularLoading || !popularLoaded ? <LoadingBlock t={t} /> : popularProducts.length === 0 ? (
           <p className={cx("text-sm", t.textMuted)}>Pas encore assez de vues sur les produits.</p>
         ) : (
           <ProductRail products={popularProducts.slice(0, 12)} t={t} onToggleFavorite={handleToggleFavorite} showViews />
@@ -253,13 +304,14 @@ export default function MallHomePage() {
       <section className={cx("py-14", t.surfaceAlt)}>
         <div className="mx-auto max-w-7xl px-4 sm:px-6">
           <SectionHeading eyebrow="À découvrir" title="Services populaires" t={t} />
-          {loading ? <LoadingBlock t={t} /> : popularServices.length === 0 ? (
+          {loading || popularLoading || !popularLoaded ? <LoadingBlock t={t} /> : popularServices.length === 0 ? (
             <p className={cx("text-sm", t.textMuted)}>Pas encore assez de vues sur les services.</p>
           ) : (
             <ProductRail products={popularServices.slice(0, 12)} t={t} onToggleFavorite={handleToggleFavorite} showViews />
           )}
         </div>
       </section>
+      </div>
 
       <section className={cx("py-14", t.surfaceAlt)}>
         <div className="mx-auto max-w-7xl px-4 sm:px-6">

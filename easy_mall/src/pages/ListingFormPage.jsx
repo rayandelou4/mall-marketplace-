@@ -269,7 +269,7 @@ export default function ListingFormPage() {
               </label>}
             </div>
 
-            <div className={cx("grid gap-3", form.item_type === "service" ? "grid-cols-3" : "grid-cols-2")}>
+            <div className={cx("grid grid-cols-2 gap-3", form.item_type === "service" && "sm:grid-cols-3")}>
               <TextField label={form.item_type === "service" ? "Tarif" : "Prix"} type="number" value={form.price} onChange={update("price")} required t={t} />
               <label className="block">
                 <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Devise</span>

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Heart, ImageOff, MapPin } from "lucide-react";
 import { cx } from "../../styles/theme";
 import { formatPrice } from "../../lib/format";
+import { optimizedImageUrl } from "../../lib/cloudinary";
 
 const PLACEHOLDER_GRADIENTS = [
   "from-indigo-400 to-violet-600",
@@ -18,7 +19,7 @@ export function ProductCard({ product, index = 0, t, onToggleFavorite, showSelle
       <div className="relative aspect-square">
         <Link to={`/produit/${product.id}`} className="block h-full w-full">
           {product.primary_image ? (
-            <img src={product.primary_image} alt={product.title} className="h-full w-full object-cover" />
+            <img src={optimizedImageUrl(product.primary_image, 480)} alt={product.title} loading="lazy" decoding="async" className="h-full w-full object-cover" />
           ) : (
             <div className={cx("flex h-full w-full items-center justify-center bg-gradient-to-br", gradient)}>
               <ImageOff className="h-8 w-8 text-white/80" strokeWidth={1.5} />
@@ -29,7 +30,7 @@ export function ProductCard({ product, index = 0, t, onToggleFavorite, showSelle
           <button
             aria-label="Ajouter aux favoris"
             onClick={() => onToggleFavorite(product)}
-            className="absolute right-2 top-2 rounded-full bg-black/30 p-1.5 text-white opacity-0 transition group-hover:opacity-100 hover:bg-black/50"
+            className="absolute right-2 top-2 rounded-full bg-black/30 p-1.5 text-white transition-colors hover:bg-black/50"
           >
             <Heart className="h-4 w-4" />
           </button>
@@ -71,8 +72,10 @@ export function ProductCard({ product, index = 0, t, onToggleFavorite, showSelle
         >
           {product.seller_avatar_url ? (
             <img
-              src={product.seller_avatar_url}
+              src={optimizedImageUrl(product.seller_avatar_url, 96)}
               alt={`Photo de ${product.seller_username}`}
+              loading="lazy"
+              decoding="async"
               className="h-7 w-7 shrink-0 rounded-full object-cover"
             />
           ) : (

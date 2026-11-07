@@ -14,6 +14,7 @@ import { createReport } from "../features/moderation/api";
 import { ModerationMessageForm } from "../components/ui/ModerationMessageForm";
 import { PRODUCT_REPORT_REASONS } from "../features/moderation/formOptions";
 import { formatPrice } from "../lib/format";
+import { optimizedImageUrl } from "../lib/cloudinary";
 import { createWhatsAppUrl } from "../lib/whatsapp";
 import { cx } from "../styles/theme";
 
@@ -222,7 +223,7 @@ export default function ProductPage() {
               <div>
                 <div className={cx("aspect-square overflow-hidden rounded-2xl border", t.cardBorder)}>
                   {product.images?.length ? (
-                    <img src={product.images[activeImage]?.image_url} alt={product.title} className="h-full w-full object-cover" />
+                    <img src={optimizedImageUrl(product.images[activeImage]?.image_url, 1400)} alt={product.title} decoding="async" className="h-full w-full object-cover" />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-indigo-400 to-violet-600">
                       <ImageOff className="h-10 w-10 text-white/80" strokeWidth={1.5} />
@@ -237,7 +238,7 @@ export default function ProductPage() {
                         onClick={() => setActiveImage(i)}
                         className={cx("h-16 w-16 overflow-hidden rounded-xl border-2", i === activeImage ? "border-indigo-600" : t.cardBorder)}
                       >
-                        <img src={img.image_url} alt="" className="h-full w-full object-cover" />
+                        <img src={optimizedImageUrl(img.image_url, 180)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
                       </button>
                     ))}
                   </div>
@@ -408,7 +409,7 @@ export default function ProductPage() {
                         {exactComparison.results.map((offer) => (
                           <Link key={offer.id} to={`/produit/${offer.id}`} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
                             <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-zinc-100">
-                              {offer.primary_image ? <img src={offer.primary_image} alt="" loading="lazy" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center"><ImageOff className="h-5 w-5 text-zinc-400" /></div>}
+                              {offer.primary_image ? <img src={optimizedImageUrl(offer.primary_image, 480)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center"><ImageOff className="h-5 w-5 text-zinc-400" /></div>}
                             </div>
                             <div className="min-w-0 flex-1">
                               <p className={cx("truncate text-sm font-medium", t.textPrimary)}>{offer.title}</p>

@@ -1,6 +1,26 @@
 const CLOUDINARY_CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || "f63hzbo5";
 const CLOUDINARY_UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || "easy_mall_unsigned";
 
+export function optimizedImageUrl(url, width) {
+  if (!url) return url;
+
+  try {
+    const imageUrl = new URL(url);
+    if (imageUrl.hostname !== "res.cloudinary.com") return url;
+
+    const uploadPath = "/image/upload/";
+    if (!imageUrl.pathname.includes(uploadPath)) return url;
+
+    imageUrl.pathname = imageUrl.pathname.replace(
+      uploadPath,
+      `${uploadPath}f_auto,q_auto,w_${width},c_limit/`
+    );
+    return imageUrl.toString();
+  } catch {
+    return url;
+  }
+}
+
 export async function uploadToCloudinary(file) {
   if (!file) {
     throw new Error("Aucun fichier sélectionné.");

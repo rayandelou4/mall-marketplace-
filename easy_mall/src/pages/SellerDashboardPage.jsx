@@ -127,7 +127,7 @@ export default function SellerDashboardPage() {
           <StatCard icon={TrendingUp} label="Ventes confirmées" value={confirmedSalesCount} t={t} />
         </div>
 
-        <div className={cx("mb-6 flex w-full max-w-2xl rounded-xl border p-1", t.border, t.cardBg)} role="tablist" aria-label="Contenu du tableau vendeur">
+        <div className={cx("mb-6 grid w-full max-w-2xl grid-cols-2 gap-1 rounded-xl border p-1 sm:flex", t.border, t.cardBg)} role="tablist" aria-label="Contenu du tableau vendeur">
           <button
             type="button"
             role="tab"
