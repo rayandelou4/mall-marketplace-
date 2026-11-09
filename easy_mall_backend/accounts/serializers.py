@@ -39,12 +39,14 @@ class UserSerializer(serializers.ModelSerializer):
     country = serializers.SerializerMethodField()
     public_location_display = serializers.SerializerMethodField()
     verification_badges = serializers.SerializerMethodField()
+    delivery_options = serializers.SerializerMethodField()
 
     def get_city(self, obj):
         location = getattr(obj, "public_location", None)
         preference = getattr(obj, "location_preference", None)
         if (
             location is None
+            or not location.is_active
             or preference is None
             or not preference.show_locality
             or location.precision
@@ -61,13 +63,24 @@ class UserSerializer(serializers.ModelSerializer):
     def get_country(self, obj):
         location = getattr(obj, "public_location", None)
         preference = getattr(obj, "location_preference", None)
-        if location is None or (preference is not None and not preference.show_country):
+        if location is None or not location.is_active or (preference is not None and not preference.show_country):
             return ""
         return location.country.name
 
     def get_public_location_display(self, obj):
         location = getattr(obj, "public_location", None)
-        return location.display_name if location is not None else ""
+        return location.display_name if location is not None and location.is_active else ""
+
+    def get_delivery_options(self, obj):
+        return [
+            {
+                "mode": option.get_mode_display(),
+                "estimated_delivery_days": option.estimated_delivery_days,
+            }
+            for option in obj.delivery_options.filter(is_active=True).only(
+                "mode", "estimated_delivery_days"
+            )
+        ]
 
     def get_verification_badges(self, obj):
         from seller_verification.models import VerificationLevel
@@ -117,15 +130,12 @@ class UserSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "username",
-            "full_name",
-            "first_name",
-            "last_name",
             "avatar_url",
-            "bio",
             "city",
             "country",
             "public_location_display",
             "verification_badges",
+            "delivery_options",
             "seller_type",
             "seller_type_display",
             "shop_name",
@@ -134,8 +144,6 @@ class UserSerializer(serializers.ModelSerializer):
             "shop_cover_url",
             "average_rating",
             "total_sales",
-            "total_purchases",
-            "theme_preference",
             "date_joined",
         ]
         read_only_fields = fields
@@ -152,9 +160,16 @@ class MeSerializer(UserSerializer):
 
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + [
+            "full_name",
+            "first_name",
+            "last_name",
+            "bio",
+            "total_purchases",
+            "theme_preference",
             "is_staff",
             "is_email_verified",
             "is_fully_verified",
+            "show_phone_on_listings",
         ]
         read_only_fields = fields
 
@@ -176,6 +191,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "shop_description",
             "shop_logo_url",
             "shop_cover_url",
+            "show_phone_on_listings",
             "theme_preference",
         ]
 

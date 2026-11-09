@@ -10,13 +10,13 @@ from django.db import transaction
 from django.db.models import F
 from rest_framework import serializers
 
-from catalog.models import Product
+from catalog.models import Product, ProductVariant, StockMovement
 from notifications.models import Notification
 from notifications.services import notify
 from payments.models import Payment
 from localization.models import PrivateAddress
 
-from .models import Order, OrderItem
+from .models import CheckoutGroup, Order, OrderItem
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -44,6 +44,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "order_created_at",
             "shipping_address",
             "product",
+            "variant",
+            "variant_label",
             "product_title",
             "seller_username",
             "quantity",
@@ -62,6 +64,7 @@ class OrderListSerializer(serializers.ModelSerializer):
 
     items_count = serializers.ReadOnlyField()
     sellers = serializers.SerializerMethodField()
+    has_delivery = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -73,11 +76,15 @@ class OrderListSerializer(serializers.ModelSerializer):
             "currency",
             "items_count",
             "sellers",
+            "has_delivery",
             "created_at",
         ]
 
     def get_sellers(self, obj):
         return list(obj.items.values_list("seller__username", flat=True).distinct())
+
+    def get_has_delivery(self, obj):
+        return any(item.sale_method == "delivery" for item in obj.items.all())
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
@@ -96,6 +103,21 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class CheckoutGroupDetailSerializer(serializers.ModelSerializer):
+    orders = OrderDetailSerializer(many=True, read_only=True)
+    items = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CheckoutGroup
+        fields = ["id", "currency", "total_amount", "orders", "items", "created_at"]
+
+    def get_items(self, obj):
+        items = OrderItem.objects.filter(order__checkout_group=obj).select_related(
+            "order", "seller", "product"
+        )
+        return OrderItemSerializer(items, many=True, context=self.context).data
 
 
 class OrderCreateSerializer(serializers.Serializer):
@@ -149,9 +171,12 @@ class OrderCreateSerializer(serializers.Serializer):
     def validate_items(self, value):
         requested_quantities = {}
         expected_prices = {}
+        conversion_visitors = {}
+        variant_ids = {}
         for entry in value:
             try:
                 product_id = uuid.UUID(str(entry["product_id"]))
+                variant_id = uuid.UUID(str(entry["variant_id"])) if entry.get("variant_id") else None
                 raw_quantity = entry.get("quantity", 1)
                 if isinstance(raw_quantity, bool):
                     raise ValueError
@@ -164,8 +189,9 @@ class OrderCreateSerializer(serializers.Serializer):
                 ) from exc
             if quantity < 1:
                 raise serializers.ValidationError("La quantité doit être au moins 1.")
-            requested_quantities[product_id] = (
-                requested_quantities.get(product_id, 0) + quantity
+            line_key = (product_id, variant_id)
+            requested_quantities[line_key] = (
+                requested_quantities.get(line_key, 0) + quantity
             )
             try:
                 expected_unit_price = (
@@ -190,21 +216,41 @@ class OrderCreateSerializer(serializers.Serializer):
                 ) from exc
             expected = (expected_unit_price, expected_shipping_cost)
             if (
-                product_id in expected_prices
-                and expected_prices[product_id] != expected
+                line_key in expected_prices
+                and expected_prices[line_key] != expected
             ):
                 raise serializers.ValidationError(
                     "Les informations de prix sont incohérentes pour un même article."
                 )
-            expected_prices[product_id] = expected
+            expected_prices[line_key] = expected
+            try:
+                conversion_visitor_id = (
+                    uuid.UUID(str(entry["conversion_visitor_id"]))
+                    if entry.get("conversion_visitor_id")
+                    else None
+                )
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise serializers.ValidationError(
+                    "L’identifiant de session de conversion est invalide."
+                ) from exc
+            if (
+                line_key in conversion_visitors
+                and conversion_visitors[line_key] != conversion_visitor_id
+            ):
+                raise serializers.ValidationError(
+                    "Les identifiants de session sont incohérents pour un même article."
+                )
+            conversion_visitors[line_key] = conversion_visitor_id
+            variant_ids[line_key] = variant_id
 
+        requested_product_ids = {product_id for product_id, _variant_id in requested_quantities}
         products = {
             product.pk: product
             for product in Product.objects.select_related("seller").filter(
-                pk__in=requested_quantities
+                pk__in=requested_product_ids
             )
         }
-        missing_ids = requested_quantities.keys() - products.keys()
+        missing_ids = requested_product_ids - products.keys()
         if missing_ids:
             raise serializers.ValidationError(
                 f"Produit {next(iter(missing_ids))} introuvable."
@@ -216,9 +262,23 @@ class OrderCreateSerializer(serializers.Serializer):
             )
 
         cleaned = []
-        for product_id, quantity in requested_quantities.items():
+        variants = {
+            variant.pk: variant
+            for variant in ProductVariant.objects.filter(
+                pk__in=[variant_id for variant_id in variant_ids.values() if variant_id]
+            )
+        }
+        for line_key, quantity in requested_quantities.items():
+            product_id, variant_id = line_key
             product = products[product_id]
-            expected_unit_price, expected_shipping_cost = expected_prices[product_id]
+            variant = variants.get(variant_id)
+            if product.variants.exists() and variant is None:
+                raise serializers.ValidationError(
+                    f"Choisissez une variante pour « {product.title} »."
+                )
+            if variant and variant.product_id != product.pk:
+                raise serializers.ValidationError("Cette variante n'appartient pas à cet article.")
+            expected_unit_price, expected_shipping_cost = expected_prices[line_key]
             if (
                 expected_unit_price is not None and expected_unit_price != product.price
             ) or (
@@ -237,10 +297,11 @@ class OrderCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     f"« {product.title} » n'est plus disponible."
                 )
-            if product.stock_quantity < quantity:
+            available_stock = variant.stock_quantity if variant else product.stock_quantity
+            if available_stock < quantity:
                 raise serializers.ValidationError(
                     f"Stock insuffisant pour « {product.title} » "
-                    f"({product.stock_quantity} disponible(s))."
+                    f"({available_stock} disponible(s))."
                 )
 
             cleaned.append(
@@ -249,6 +310,8 @@ class OrderCreateSerializer(serializers.Serializer):
                     "quantity": quantity,
                     "expected_unit_price": expected_unit_price,
                     "expected_shipping_cost": expected_shipping_cost,
+                    "conversion_visitor_id": conversion_visitors.get(line_key),
+                    "variant": variant,
                 }
             )
         return cleaned
@@ -258,10 +321,15 @@ class OrderCreateSerializer(serializers.Serializer):
         buyer = self.context["request"].user
         requested_items = self.validated_data["items"]
         requested_quantities = {
-            entry["product"].pk: entry["quantity"] for entry in requested_items
+            (entry["product"].pk, entry["variant"].pk if entry["variant"] else None): entry["quantity"]
+            for entry in requested_items
+        }
+        conversion_visitors = {
+            (entry["product"].pk, entry["variant"].pk if entry["variant"] else None): entry["conversion_visitor_id"]
+            for entry in requested_items
         }
         expected_prices = {
-            entry["product"].pk: (
+            (entry["product"].pk, entry["variant"].pk if entry["variant"] else None): (
                 entry["expected_unit_price"],
                 entry["expected_shipping_cost"],
             )
@@ -271,18 +339,30 @@ class OrderCreateSerializer(serializers.Serializer):
             product.pk: product
             for product in Product.objects.select_for_update()
             .select_related("seller")
-            .filter(pk__in=requested_quantities)
+            .filter(pk__in={product_id for product_id, _variant_id in requested_quantities})
             .order_by("pk")
         }
-        if locked_products.keys() != requested_quantities.keys():
+        if locked_products.keys() != {product_id for product_id, _variant_id in requested_quantities}:
             raise serializers.ValidationError(
                 "Un article du panier n'est plus disponible."
             )
 
+        requested_variant_ids = {variant_id for _product_id, variant_id in requested_quantities if variant_id}
+        locked_variants = {
+            variant.pk: variant
+            for variant in ProductVariant.objects.select_for_update()
+            .filter(pk__in=requested_variant_ids)
+            .order_by("pk")
+        }
+        if locked_variants.keys() != requested_variant_ids:
+            raise serializers.ValidationError("Une variante du panier n'est plus disponible.")
+
         items_data = []
-        for product_id, quantity in requested_quantities.items():
+        for line_key, quantity in requested_quantities.items():
+            product_id, variant_id = line_key
             product = locked_products[product_id]
-            expected_unit_price, expected_shipping_cost = expected_prices[product_id]
+            variant = locked_variants.get(variant_id)
+            expected_unit_price, expected_shipping_cost = expected_prices[line_key]
             if (
                 expected_unit_price is not None and expected_unit_price != product.price
             ) or (
@@ -297,78 +377,137 @@ class OrderCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     f"« {product.title} » n'est plus disponible."
                 )
-            if product.stock_quantity < quantity:
+            available_stock = variant.stock_quantity if variant else product.stock_quantity
+            if available_stock < quantity:
                 raise serializers.ValidationError(
                     f"Stock insuffisant pour « {product.title} » "
-                    f"({product.stock_quantity} disponible(s))."
+                    f"({available_stock} disponible(s))."
                 )
-            items_data.append({"product": product, "quantity": quantity})
+            items_data.append(
+                {
+                    "product": product,
+                    "quantity": quantity,
+                    "conversion_visitor_id": conversion_visitors[line_key],
+                    "variant": variant,
+                }
+            )
 
         if len({entry["product"].currency for entry in items_data}) > 1:
             raise serializers.ValidationError(
                 "Tous les articles d'une commande doivent utiliser la même devise."
             )
 
-        order = Order.objects.create(
+        group = CheckoutGroup.objects.create(
             buyer=buyer,
-            shipping_address=self.validated_data["shipping_address"],
-            shipping_address_record=self.validated_data.get("shipping_address_record"),
             currency=items_data[0]["product"].currency,
-            payment_method=(
-                Order.PaymentMethod.MOBILE_MONEY
-                if settings.PAYMENTS_MODE == "online"
-                else Order.PaymentMethod.CASH
-            ),
         )
-
-        order_items = [
-            OrderItem(
-                order=order,
-                product=entry["product"],
-                seller=entry["product"].seller,
-                product_title=entry["product"].title,
-                quantity=entry["quantity"],
-                unit_price=entry["product"].price,
-                shipping_cost=(
-                    entry["product"].shipping_cost
-                    if entry["product"].sale_method == Product.SaleMethod.DELIVERY
-                    else 0
-                ),
-                sale_method=entry["product"].sale_method,
-            )
-            for entry in items_data
-        ]
-        OrderItem.objects.bulk_create(order_items)
-
         for entry in items_data:
             product = entry["product"]
-            remaining_stock = product.stock_quantity - entry["quantity"]
-            update_fields = {"stock_quantity": F("stock_quantity") - entry["quantity"]}
-            # Stock épuisé : on sort l'annonce du statut "published" tout de
-            # suite, sinon elle resterait visible dans le catalogue public
-            # (is_available vérifie stock_quantity, mais pas le queryset de liste).
-            if remaining_stock <= 0:
-                update_fields["status"] = Product.Status.SOLD
-            Product.objects.filter(pk=product.pk).update(**update_fields)
+            if product.item_type == Product.ItemType.SERVICE:
+                continue
+            if entry["variant"]:
+                updated_variant = ProductVariant.objects.filter(
+                    pk=entry["variant"].pk,
+                    stock_quantity__gte=entry["quantity"],
+                ).update(stock_quantity=F("stock_quantity") - entry["quantity"])
+                if updated_variant != 1:
+                    raise serializers.ValidationError(
+                        f"Le stock de la variante « {entry['variant'].label} » vient de changer. Actualisez votre panier."
+                    )
+            reserved = Product.objects.filter(
+                pk=product.pk,
+                status=Product.Status.PUBLISHED,
+                moderation_status=Product.ModerationStatus.APPROVED,
+                is_suspended=False,
+                stock_quantity__gte=entry["quantity"],
+            ).update(stock_quantity=F("stock_quantity") - entry["quantity"])
+            if reserved != 1:
+                raise serializers.ValidationError(
+                    f"Le stock de « {product.title} » vient de changer. Actualisez votre panier."
+                )
+            Product.objects.filter(pk=product.pk, stock_quantity=0).update(
+                status=Product.Status.SOLD
+            )
 
-        order.recalculate_total()
-
-        seller_items = {}
+        items_by_seller = {}
         for entry in items_data:
-            seller = entry["product"].seller
-            seller_items.setdefault(seller.pk, {"seller": seller, "titles": []})[
-                "titles"
-            ].append(entry["product"].title)
-        for seller_data in seller_items.values():
-            titles = ", ".join(seller_data["titles"])
+            items_by_seller.setdefault(entry["product"].seller_id, []).append(entry)
+
+        for seller_id, seller_entries in items_by_seller.items():
+            has_delivery = any(
+                entry["product"].sale_method == Product.SaleMethod.DELIVERY
+                for entry in seller_entries
+            )
+            order = Order.objects.create(
+                buyer=buyer,
+                checkout_group=group,
+                shipping_address=(
+                    self.validated_data["shipping_address"] if has_delivery else ""
+                ),
+                shipping_address_record=(
+                    self.validated_data.get("shipping_address_record")
+                    if has_delivery
+                    else None
+                ),
+                currency=group.currency,
+                payment_method=(
+                    Order.PaymentMethod.MOBILE_MONEY
+                    if settings.PAYMENTS_MODE == "online"
+                    else Order.PaymentMethod.CASH
+                ),
+            )
+            OrderItem.objects.bulk_create([
+                OrderItem(
+                    order=order,
+                    product=entry["product"],
+                    seller=entry["product"].seller,
+                    product_title=entry["product"].title,
+                    variant=entry["variant"],
+                    variant_label=entry["variant"].label if entry["variant"] else "",
+                    quantity=entry["quantity"],
+                    conversion_visitor_id=entry["conversion_visitor_id"],
+                    unit_price=entry["product"].price,
+                    shipping_cost=(
+                        entry["product"].shipping_cost
+                        if entry["product"].sale_method == Product.SaleMethod.DELIVERY
+                        else 0
+                    ),
+                    sale_method=entry["product"].sale_method,
+                )
+                for entry in seller_entries
+            ])
+            movements = []
+            for entry in seller_entries:
+                if entry["product"].item_type == Product.ItemType.SERVICE:
+                    continue
+                movements.append(
+                    StockMovement(
+                        product=entry["product"],
+                        variant=entry["variant"],
+                        variant_label=entry["variant"].label if entry["variant"] else "",
+                        product_title=entry["product"].title,
+                        actor=buyer,
+                        order=order,
+                        movement_type=StockMovement.MovementType.SALE,
+                        quantity_delta=-entry["quantity"],
+                    )
+                )
+            StockMovement.objects.bulk_create(movements)
+            order.recalculate_total()
+            titles = ", ".join(entry["product"].title for entry in seller_entries)
             notify(
-                seller_data["seller"],
+                seller_entries[0]["product"].seller,
                 Notification.NotificationType.NEW_SALE,
                 "Nouvelle commande reçue",
                 f"{buyer.username} a commandé : {titles}.",
                 "/vendeur?section=sales",
             )
-        return order
+
+        group.total_amount = sum(
+            (order.total_amount for order in group.orders.all()), Decimal("0.00")
+        )
+        group.save(update_fields=["total_amount"])
+        return group
 
 
 class OrderCancelSerializer(serializers.Serializer):
@@ -397,14 +536,29 @@ class OrderCancelSerializer(serializers.Serializer):
             )
 
         order_items = list(order.items.select_related("product").all())
-        product_ids = {item.product_id for item in order_items if item.product_id}
+        product_ids = {
+            item.product_id
+            for item in order_items
+            if item.product_id
+            and item.product.item_type == Product.ItemType.PRODUCT
+        }
         locked_products = {
             product.pk: product
             for product in Product.objects.select_for_update()
             .filter(pk__in=product_ids)
             .order_by("pk")
         }
+        variant_ids = {item.variant_id for item in order_items if item.variant_id}
+        locked_variants = {
+            variant.pk: variant
+            for variant in ProductVariant.objects.select_for_update()
+            .filter(pk__in=variant_ids)
+            .order_by("pk")
+        }
+        movements = []
         for item in order_items:
+            if not item.product_id or item.product.item_type == Product.ItemType.SERVICE:
+                continue
             product = locked_products.get(item.product_id)
             if not product:
                 continue
@@ -419,6 +573,24 @@ class OrderCancelSerializer(serializers.Serializer):
                 stock_quantity=F("stock_quantity") + item.quantity,
                 status=restored_status,
             )
+            variant = locked_variants.get(item.variant_id)
+            if variant:
+                ProductVariant.objects.filter(pk=variant.pk).update(
+                    stock_quantity=F("stock_quantity") + item.quantity
+                )
+            movements.append(
+                StockMovement(
+                    product=product,
+                    variant=variant,
+                    variant_label=item.variant_label,
+                    product_title=item.product_title,
+                    actor=order.buyer,
+                    order=order,
+                    movement_type=StockMovement.MovementType.CANCELLATION,
+                    quantity_delta=item.quantity,
+                )
+            )
+        StockMovement.objects.bulk_create(movements)
 
         order.payments.filter(status=Payment.Status.PENDING).update(
             status=Payment.Status.FAILED

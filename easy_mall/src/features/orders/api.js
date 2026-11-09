@@ -9,7 +9,9 @@ export function createOrder({ shippingAddress, privateAddressId, items }) {
         : { shipping_address: shippingAddress }),
       items: items.map((i) => ({
         product_id: i.product.id,
+        ...(i.variant?.id ? { variant_id: i.variant.id } : {}),
         quantity: i.quantity,
+        ...(i.visitorId ? { conversion_visitor_id: i.visitorId } : {}),
         unit_price: i.product.price,
         shipping_cost: i.product.shipping_cost || 0,
       })),

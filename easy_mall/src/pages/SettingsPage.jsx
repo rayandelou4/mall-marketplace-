@@ -47,11 +47,13 @@ export default function SettingsPage() {
     shop_description: user?.shop_description || "",
     shop_logo_url: user?.shop_logo_url || "",
     shop_cover_url: user?.shop_cover_url || "",
+    show_phone_on_listings: Boolean(user?.show_phone_on_listings),
   });
   const [profileError, setProfileError] = useState(null);
   const [profileNotice, setProfileNotice] = useState(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadingShopImage, setUploadingShopImage] = useState({ logo: false, cover: false });
   const [countries, setCountries] = useState([]);
   const [areas, setAreas] = useState([]);
   const [selectedCountryId, setSelectedCountryId] = useState("");
@@ -107,6 +109,20 @@ export default function SettingsPage() {
       setProfileError(error.message || "Le téléchargement de la photo a échoué.");
     } finally {
       setUploadingAvatar(false);
+    }
+  }
+
+  async function handleShopImageChange(field, file) {
+    if (!file) return;
+    const key = field === "shop_logo_url" ? "logo" : "cover";
+    setUploadingShopImage((current) => ({ ...current, [key]: true }));
+    setProfileError(null);
+    try {
+      update(field)(await uploadToCloudinary(file));
+    } catch (error) {
+      setProfileError(error.message || "Le téléchargement de l'image de boutique a échoué.");
+    } finally {
+      setUploadingShopImage((current) => ({ ...current, [key]: false }));
     }
   }
 
@@ -234,8 +250,28 @@ export default function SettingsPage() {
                 <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Description de la boutique</span>
                 <textarea value={form.shop_description} onChange={(e) => update("shop_description")(e.target.value)} rows={3} className={inputClass} />
               </label>
+              {[["shop_logo_url", "Logo de la boutique", "logo"], ["shop_cover_url", "Bannière de la boutique", "cover"]].map(([field, label, key]) => (
+                <label key={field} className="block">
+                  <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>{label}</span>
+                  <input type="file" accept="image/*" onChange={(event) => handleShopImageChange(field, event.target.files?.[0])} className={cx("w-full rounded-xl border px-3 py-2 text-sm", t.border, t.inputBg, t.textPrimary)} />
+                  {uploadingShopImage[key] && <span className={cx("mt-1 block text-xs", t.textMuted)}>Téléchargement…</span>}
+                  {form[field] && <img src={form[field]} alt={`Aperçu : ${label}`} className={cx("mt-2 w-full object-cover", key === "logo" ? "h-20 w-20 rounded-full" : "h-28 rounded-lg")} />}
+                </label>
+              ))}
             </>
           )}
+          <label className={cx("flex items-start gap-3 rounded-xl border p-4 text-sm", t.border, t.cardBg)}>
+            <input
+              type="checkbox"
+              checked={form.show_phone_on_listings}
+              onChange={(event) => update("show_phone_on_listings")(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-indigo-600"
+            />
+            <span>
+              <span className={cx("block font-medium", t.textPrimary)}>Autoriser le contact WhatsApp direct</span>
+              <span className={cx("mt-1 block text-xs", t.textMuted)}>Votre numéro sera visible aux acheteurs connectés sur vos annonces.</span>
+            </span>
+          </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Pays</span>

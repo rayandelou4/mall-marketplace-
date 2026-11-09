@@ -13,7 +13,7 @@ import django_filters
 from django.db.models import Case, Count, DecimalField, F, IntegerField, Min, OuterRef, Q, Subquery, Value, When, Window
 from django.db.models.functions import RowNumber
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import filters, permissions, viewsets
+from rest_framework import filters, permissions, serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
@@ -21,7 +21,7 @@ from rest_framework.response import Response
 
 from accounts.models import User
 from localization.models import AdministrativeArea, Country, DeliveryOption
-from .models import Category, Favorite, Product, SavedSearch, SellerFavorite
+from .models import Category, Favorite, Product, ProductActivity, SavedSearch, SellerFavorite, StockMovement
 from .serializers import (
     CategorySerializer,
     FavoriteSerializer,
@@ -31,6 +31,7 @@ from .serializers import (
     ProductListSerializer,
     SavedSearchSerializer,
     SellerFavoriteSerializer,
+    StockMovementSerializer,
 )
 
 # Mots trop courants pour compter dans le rapprochement "titre similaire" du
@@ -143,10 +144,11 @@ class ProductFilter(django_filters.FilterSet):
     def filter_available(self, queryset, name, value):
         available_products = Q(
             is_suspended=False,
-            item_type=Product.ItemType.PRODUCT,
             status=Product.Status.PUBLISHED,
             moderation_status=Product.ModerationStatus.APPROVED,
-            stock_quantity__gt=0,
+        ) & (
+            Q(item_type=Product.ItemType.SERVICE)
+            | Q(item_type=Product.ItemType.PRODUCT, stock_quantity__gt=0)
         )
         return queryset.filter(available_products if value else ~available_products)
 
@@ -318,6 +320,12 @@ class ProductPagination(PageNumberPagination):
     max_page_size = 20
 
 
+class ProductActivityInputSerializer(serializers.Serializer):
+    activity_type = serializers.ChoiceField(choices=ProductActivity.ActivityType.choices)
+    visitor_id = serializers.UUIDField()
+    event_id = serializers.UUIDField()
+
+
 class ProductViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, ProductOrderingFilter]
@@ -438,7 +446,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             "seller__location_preference",
             "category",
             "comparison_identity",
-        ).prefetch_related("images")
+        ).prefetch_related("images", "variants")
         if self.action == "list":
             queryset = self._annotate_comparison_summary(queryset)
         if self.action in ("list", "retrieve", "comparisons"):
@@ -477,10 +485,41 @@ class ProductViewSet(viewsets.ModelViewSet):
                     "detail": "Cette annonce est suspendue et n'est plus accessible au public."
                 }
             )
-        Product.objects.filter(pk=instance.pk).update(views_count=F("views_count") + 1)
-        instance.refresh_from_db(fields=["views_count"])
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], permission_classes=[permissions.AllowAny])
+    def track_activity(self, request, pk=None):
+        product = self.get_object()
+        serializer = ProductActivityInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        if values["activity_type"] == ProductActivity.ActivityType.VIEW:
+            _activity, created = ProductActivity.objects.get_or_create(
+                product=product,
+                activity_type=ProductActivity.ActivityType.VIEW,
+                visitor_id=values["visitor_id"],
+                defaults={"event_id": values["event_id"]},
+            )
+            if created:
+                Product.objects.filter(pk=product.pk).update(
+                    views_count=F("views_count") + 1
+                )
+        else:
+            _activity, created = ProductActivity.objects.get_or_create(
+                event_id=values["event_id"],
+                defaults={
+                    "product": product,
+                    "activity_type": values["activity_type"],
+                    "visitor_id": values["visitor_id"],
+                },
+            )
+            if not created and (
+                _activity.product_id != product.pk
+                or _activity.activity_type != values["activity_type"]
+            ):
+                raise ValidationError({"event_id": "Identifiant d'événement déjà utilisé."})
+        return Response({"recorded": created})
 
     @action(
         detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated]
@@ -510,13 +549,25 @@ class ProductViewSet(viewsets.ModelViewSet):
         queryset = (
             Product.objects.filter(seller=request.user)
             .select_related("category")
-            .prefetch_related("images")
+            .prefetch_related("images", "variants")
         )
         page = self.paginate_queryset(queryset)
         serializer = ProductListSerializer(page or queryset, many=True)
         if page is not None:
             return self.get_paginated_response(serializer.data)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+    def stock_history(self, request, pk=None):
+        product = Product.objects.filter(pk=pk, seller=request.user).first()
+        if product is None:
+            from rest_framework.exceptions import NotFound
+
+            raise NotFound("Annonce introuvable.")
+        queryset = StockMovement.objects.filter(product=product).select_related("actor")
+        page = self.paginate_queryset(queryset)
+        serializer = StockMovementSerializer(page or queryset, many=True)
+        return self.get_paginated_response(serializer.data) if page is not None else Response(serializer.data)
 
     @action(detail=True, methods=["get"])
     def comparisons(self, request, pk=None):

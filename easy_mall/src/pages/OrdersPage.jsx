@@ -254,7 +254,8 @@ export default function OrdersPage() {
                 )}
 
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {order.status === "pending" && order.payment_method === "cash" && (
+                  {order.payment_method === "cash" && (
+                    (order.status === "shipped" || (order.status === "pending" && !order.has_delivery)) && (
                     <button
                       onClick={() => handleConfirm(order)}
                       disabled={busyId === order.id}
@@ -262,6 +263,7 @@ export default function OrdersPage() {
                     >
                       <PackageCheck className="h-3.5 w-3.5" /> Confirmer la réception
                     </button>
+                    )
                   )}
                   {order.status === "pending" && (
                     <button

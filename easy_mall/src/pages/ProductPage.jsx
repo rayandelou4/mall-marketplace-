@@ -8,7 +8,7 @@ import { LoadingBlock, ErrorBlock, SectionHeading } from "../components/ui/Statu
 import { useTheme } from "../features/theme/ThemeContext";
 import { useAuth } from "../features/auth/AuthContext";
 import { useCart } from "../features/cart/CartContext";
-import { fetchProduct, fetchComparisons, toggleFavorite } from "../features/catalog/api";
+import { fetchProduct, fetchComparisons, toggleFavorite, getActivityVisitorId, trackProductActivity } from "../features/catalog/api";
 import { fetchReviews } from "../features/reviews/api";
 import { createReport } from "../features/moderation/api";
 import { ModerationMessageForm } from "../components/ui/ModerationMessageForm";
@@ -42,6 +42,7 @@ export default function ProductPage() {
   const [comparisonState, setComparisonState] = useState({ loading: false, error: null, exact: null, similar: [] });
   const [reviews, setReviews] = useState([]);
   const [activeImage, setActiveImage] = useState(0);
+  const [selectedVariantId, setSelectedVariantId] = useState("");
   const [actionNotice, setActionNotice] = useState(null);
   const [contactOptionsOpen, setContactOptionsOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -51,12 +52,14 @@ export default function ProductPage() {
     let cancelled = false;
     setState({ loading: true, error: null, product: null });
     setActiveImage(0);
+    setSelectedVariantId("");
     setComparisonState({ loading: false, error: null, exact: null, similar: [] });
 
     fetchProduct(id)
       .then((product) => {
         if (cancelled) return;
         setState({ loading: false, error: null, product });
+        trackProductActivity(product.id, "view", getActivityVisitorId()).catch(() => {});
         fetchReviews({ user: product.seller_username })
           .then((items) => !cancelled && setReviews(items))
           .catch(() => {});
@@ -91,11 +94,22 @@ export default function ProductPage() {
       return;
     }
     if (product.item_type === "service") return setContactOptionsOpen((open) => !open);
+    const variant = product.variants?.find((item) => item.id === selectedVariantId) || null;
+    if (product.variants?.length && !variant) {
+      setActionNotice("Choisissez une variante avant l’ajout au panier.");
+      return;
+    }
+    if (variant && variant.stock_quantity < 1) {
+      setActionNotice("Cette variante est épuisée.");
+      return;
+    }
     if (!product.is_available) {
       setActionNotice("Cette annonce n'est pas disponible à l'achat.");
       return;
     }
-    addItem(product, 1);
+    const visitorId = getActivityVisitorId();
+    addItem(product, 1, visitorId, variant);
+    trackProductActivity(product.id, "cart_add", visitorId).catch(() => {});
     setActionNotice("Ajouté au panier.");
   }
 
@@ -225,7 +239,7 @@ export default function ProductPage() {
                   {product.images?.length ? (
                     <img src={optimizedImageUrl(product.images[activeImage]?.image_url, 1400)} alt={product.title} decoding="async" className="h-full w-full object-cover" />
                   ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-indigo-400 to-violet-600">
+                    <div className="flex h-full w-full items-center justify-center bg-linear-to-br from-indigo-400 to-violet-600">
                       <ImageOff className="h-10 w-10 text-white/80" strokeWidth={1.5} />
                     </div>
                   )}
@@ -267,6 +281,25 @@ export default function ProductPage() {
                   </p>
                 )}
 
+                {product.item_type === "product" && product.variants?.length > 0 && (
+                  <label className="mt-4 block max-w-sm">
+                    <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Variante</span>
+                    <select
+                      value={selectedVariantId}
+                      onChange={(event) => setSelectedVariantId(event.target.value)}
+                      required
+                      className={cx("w-full rounded-xl border px-4 py-2.5 text-sm", t.border, t.cardBg, t.textPrimary)}
+                    >
+                      <option value="">Choisir une variante</option>
+                      {product.variants.map((variant) => (
+                        <option key={variant.id} value={variant.id} disabled={variant.stock_quantity < 1}>
+                          {[variant.label, ...Object.entries(variant.attributes || {}).map(([name, value]) => `${name}: ${value}`)].join(" · ")} · {variant.stock_quantity > 0 ? `${variant.stock_quantity} disponible(s)` : "Épuisée"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row">
                   {product.item_type === "service" ? (
                     <div className="relative flex-1">
@@ -277,7 +310,7 @@ export default function ProductPage() {
                     </div>
                   ) : (
                     <>
-                      <button onClick={handleAddToCart} disabled={product.status === "archived" || !canBuy} className="flex flex-1 items-center justify-center gap-2 rounded-full bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">
+                      <button onClick={handleAddToCart} disabled={product.status === "archived" || !canBuy || (product.variants?.length > 0 && !selectedVariantId)} className="flex flex-1 items-center justify-center gap-2 rounded-full bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">
                         <ShoppingCart className="h-4 w-4" /> Ajouter au panier
                       </button>
                       <div className="relative">

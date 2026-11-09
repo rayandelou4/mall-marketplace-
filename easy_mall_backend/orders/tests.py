@@ -6,13 +6,14 @@ from django.test import override_settings
 from rest_framework.test import APIClient
 
 from accounts.models import User
-from catalog.models import Category, Product
+from catalog.models import Category, Product, ProductVariant
 from payments.models import Payment, PaymentProvider
 from payments.serializers import PaymentInitiateSerializer
 from notifications.models import Notification
 from localization.models import Country, PrivateAddress
 
 from .models import Order
+from catalog.models import StockMovement
 from .serializers import (
     OrderCancelSerializer,
     OrderCreateSerializer,
@@ -53,6 +54,9 @@ class OrderCheckoutTests(TestCase):
         self.request = SimpleNamespace(user=self.buyer)
 
     def create_order(self, items):
+        return self.create_checkout_group(items).orders.get()
+
+    def create_checkout_group(self, items):
         serializer = OrderCreateSerializer(
             data={"shipping_address": "Adresse test", "items": items},
             context={"request": self.request},
@@ -67,6 +71,43 @@ class OrderCheckoutTests(TestCase):
         self.assertEqual(order.total_amount, 23)
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock_quantity, 3)
+        movement = StockMovement.objects.get(
+            product=self.product, movement_type=StockMovement.MovementType.SALE
+        )
+        self.assertEqual(movement.quantity_delta, -2)
+
+    def test_variant_checkout_tracks_attribution_and_restores_variant_stock(self):
+        self.product.stock_quantity = 5
+        self.product.save(update_fields=["stock_quantity"])
+        variant = ProductVariant.objects.create(
+            product=self.product,
+            label="Noir / 128 Go",
+            attributes={"couleur": "Noir", "capacité": "128 Go"},
+            stock_quantity=2,
+        )
+        visitor_id = "e220b04a-7fd2-4c12-a7be-f301472a9182"
+        order = self.create_order([{
+            "product_id": str(self.product.pk),
+            "variant_id": str(variant.pk),
+            "quantity": 1,
+            "conversion_visitor_id": visitor_id,
+        }])
+
+        variant.refresh_from_db()
+        self.product.refresh_from_db()
+        item = order.items.get()
+        self.assertEqual(variant.stock_quantity, 1)
+        self.assertEqual(self.product.stock_quantity, 4)
+        self.assertEqual(item.variant_label, variant.label)
+        self.assertEqual(str(item.conversion_visitor_id), visitor_id)
+
+        cancel_serializer = OrderCancelSerializer(data={}, context={"order": order})
+        self.assertTrue(cancel_serializer.is_valid(), cancel_serializer.errors)
+        cancel_serializer.save()
+        variant.refresh_from_db()
+        self.product.refresh_from_db()
+        self.assertEqual(variant.stock_quantity, 2)
+        self.assertEqual(self.product.stock_quantity, 5)
 
     def test_pickup_checkout_does_not_require_address_or_charge_shipping(self):
         self.product.sale_method = Product.SaleMethod.PICKUP
@@ -77,12 +118,49 @@ class OrderCheckoutTests(TestCase):
         )
 
         self.assertTrue(serializer.is_valid(), serializer.errors)
-        order = serializer.save()
+        order = serializer.save().orders.get()
 
         self.assertEqual(order.shipping_address, "")
         self.assertEqual(order.total_amount, 10)
         self.assertEqual(order.items.get().sale_method, Product.SaleMethod.PICKUP)
         self.assertEqual(order.items.get().shipping_cost, 0)
+
+    def test_service_orders_do_not_consume_or_restore_physical_stock(self):
+        self.product.item_type = Product.ItemType.SERVICE
+        self.product.save(update_fields=["item_type"])
+
+        first_order = self.create_order(
+            [{"product_id": str(self.product.pk), "quantity": 1}]
+        )
+        self.product.refresh_from_db()
+        self.assertTrue(self.product.is_available)
+        self.assertEqual(self.product.stock_quantity, 5)
+        self.assertEqual(self.product.status, Product.Status.PUBLISHED)
+        self.assertFalse(
+            StockMovement.objects.filter(
+                product=self.product,
+                movement_type=StockMovement.MovementType.SALE,
+            ).exists()
+        )
+
+        cancel_serializer = OrderCancelSerializer(
+            data={}, context={"order": first_order}
+        )
+        self.assertTrue(cancel_serializer.is_valid(), cancel_serializer.errors)
+        cancel_serializer.save()
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock_quantity, 5)
+        self.assertFalse(
+            StockMovement.objects.filter(
+                product=self.product,
+                movement_type=StockMovement.MovementType.CANCELLATION,
+            ).exists()
+        )
+
+        self.create_order([{ "product_id": str(self.product.pk), "quantity": 1 }])
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.status, Product.Status.PUBLISHED)
+        self.assertEqual(self.product.stock_quantity, 5)
 
     def test_mixed_delivery_and_pickup_total_only_charges_delivery(self):
         self.product.sale_method = Product.SaleMethod.PICKUP
@@ -113,7 +191,7 @@ class OrderCheckoutTests(TestCase):
         )
 
         self.assertTrue(serializer.is_valid(), serializer.errors)
-        order = serializer.save()
+        order = serializer.save().orders.get()
 
         self.assertEqual(order.total_amount, 36)
         self.assertEqual(
@@ -140,7 +218,7 @@ class OrderCheckoutTests(TestCase):
         )
 
         self.assertTrue(serializer.is_valid(), serializer.errors)
-        order = serializer.save()
+        order = serializer.save().orders.get()
         snapshot = order.shipping_address
         self.assertEqual(order.shipping_address_record_id, address.pk)
         self.assertIn("Avenue de la Paix 12", snapshot)
@@ -213,7 +291,7 @@ class OrderCheckoutTests(TestCase):
         )
 
         self.assertTrue(serializer.is_valid(), serializer.errors)
-        order = serializer.save()
+        order = serializer.save().orders.get()
         self.assertEqual(order.payment_method, Order.PaymentMethod.CASH)
         self.assertEqual(order.status, Order.Status.PENDING)
         self.assertFalse(order.items.get().is_shipped)
@@ -227,6 +305,8 @@ class OrderCheckoutTests(TestCase):
     def test_cash_confirmation_delivers_pending_order_once_and_notifies_each_seller(
         self,
     ):
+        self.product.sale_method = Product.SaleMethod.PICKUP
+        self.product.save(update_fields=["sale_method"])
         second_seller = User.objects.create_user(
             email="seller2@example.com",
             phone_number="+10000000003",
@@ -245,35 +325,59 @@ class OrderCheckoutTests(TestCase):
             stock_quantity=2,
             status=Product.Status.PUBLISHED,
             moderation_status=Product.ModerationStatus.APPROVED,
+            sale_method=Product.SaleMethod.PICKUP,
         )
-        order = self.create_order(
+        checkout_group = self.create_checkout_group(
             [
                 {"product_id": str(self.product.pk), "quantity": 1},
                 {"product_id": str(second_product.pk), "quantity": 1},
             ]
         )
-        self.assertEqual(order.payment_method, Order.PaymentMethod.CASH)
+        first_order = checkout_group.orders.get(items__seller=self.seller)
+        second_order = checkout_group.orders.get(items__seller=second_seller)
+        self.assertEqual(checkout_group.orders.count(), 2)
+        self.assertEqual(first_order.payment_method, Order.PaymentMethod.CASH)
         client = APIClient()
 
         client.force_authenticate(user=self.seller)
         response = client.post(
-            f"/api/v1/orders/orders/{order.pk}/confirm_receipt/", {}, format="json"
+            f"/api/v1/orders/orders/{first_order.pk}/confirm_receipt/", {}, format="json"
         )
         self.assertEqual(response.status_code, 404)
 
         client.force_authenticate(user=self.buyer)
         response = client.post(
-            f"/api/v1/orders/orders/{order.pk}/confirm_receipt/", {}, format="json"
+            f"/api/v1/orders/orders/{first_order.pk}/confirm_receipt/", {}, format="json"
         )
         self.assertEqual(response.status_code, 200)
-        order.refresh_from_db()
-        self.assertEqual(order.status, Order.Status.DELIVERED)
-        self.assertFalse(Payment.objects.filter(order=order).exists())
+        first_order.refresh_from_db()
+        second_order.refresh_from_db()
+        self.assertEqual(first_order.status, Order.Status.DELIVERED)
+        self.assertEqual(second_order.status, Order.Status.PENDING)
+        self.assertFalse(Payment.objects.filter(order__checkout_group=checkout_group).exists())
         self.buyer.refresh_from_db()
         self.seller.refresh_from_db()
         second_seller.refresh_from_db()
-        self.assertEqual(self.buyer.total_purchases, 1)
+        self.assertEqual(self.buyer.total_purchases, 0)
         self.assertEqual(self.seller.total_sales, 1)
+        self.assertEqual(second_seller.total_sales, 0)
+        self.assertEqual(
+            Notification.objects.filter(
+                user__in=[self.seller, second_seller],
+                notification_type=Notification.NotificationType.DELIVERY,
+            ).count(),
+            1,
+        )
+
+        response = client.post(
+            f"/api/v1/orders/orders/{second_order.pk}/confirm_receipt/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        second_order.refresh_from_db()
+        self.assertEqual(second_order.status, Order.Status.DELIVERED)
+        self.buyer.refresh_from_db()
+        second_seller.refresh_from_db()
+        self.assertEqual(self.buyer.total_purchases, 1)
         self.assertEqual(second_seller.total_sales, 1)
         self.assertEqual(
             Notification.objects.filter(
@@ -289,7 +393,7 @@ class OrderCheckoutTests(TestCase):
 
         client.force_authenticate(user=self.buyer)
         response = client.post(
-            f"/api/v1/orders/orders/{order.pk}/confirm_receipt/", {}, format="json"
+            f"/api/v1/orders/orders/{second_order.pk}/confirm_receipt/", {}, format="json"
         )
         self.assertEqual(response.status_code, 400)
         self.buyer.refresh_from_db()
@@ -298,6 +402,68 @@ class OrderCheckoutTests(TestCase):
         self.assertEqual(self.buyer.total_purchases, 1)
         self.assertEqual(self.seller.total_sales, 1)
         self.assertEqual(second_seller.total_sales, 1)
+
+    def test_delivery_needs_each_seller_line_shipped_before_buyer_confirmation(self):
+        second_product = Product.objects.create(
+            seller=self.seller,
+            category=self.category,
+            title="Deuxième colis",
+            description="Test",
+            price="5.00",
+            currency="USD",
+            city="Kinshasa",
+            country="RDC",
+            stock_quantity=2,
+            status=Product.Status.PUBLISHED,
+            moderation_status=Product.ModerationStatus.APPROVED,
+        )
+        order = self.create_order([
+            {"product_id": str(self.product.pk), "quantity": 1},
+            {"product_id": str(second_product.pk), "quantity": 1},
+        ])
+        items = list(order.items.order_by("pk"))
+        client = APIClient()
+        client.force_authenticate(user=self.buyer)
+
+        list_response = client.get("/api/v1/orders/orders/")
+        self.assertTrue(list_response.data["results"][0]["has_delivery"])
+        response = client.post(
+            f"/api/v1/orders/orders/{order.pk}/confirm_receipt/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 400)
+
+        client.force_authenticate(user=self.seller)
+        response = client.post(
+            f"/api/v1/orders/my-sales/{items[0].pk}/mark_shipped/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.PENDING)
+
+        client.force_authenticate(user=self.buyer)
+        response = client.post(
+            f"/api/v1/orders/orders/{order.pk}/confirm_receipt/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 400)
+
+        client.force_authenticate(user=self.seller)
+        response = client.post(
+            f"/api/v1/orders/my-sales/{items[1].pk}/mark_shipped/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.SHIPPED)
+
+        client.force_authenticate(user=self.buyer)
+        response = client.post(
+            f"/api/v1/orders/orders/{order.pk}/confirm_receipt/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.DELIVERED)
+        self.assertFalse(order.items.filter(sale_method="delivery", is_shipped=False).exists())
+        self.seller.refresh_from_db()
+        self.assertEqual(self.seller.total_sales, 1)
 
     @override_settings(PAYMENTS_MODE="online")
     def test_online_mode_creates_mobile_money_order_and_keeps_release_flow(self):
@@ -405,6 +571,18 @@ class OrderCheckoutTests(TestCase):
         self.assertEqual(self.product.stock_quantity, 5)
         self.assertEqual(self.product.status, Product.Status.PUBLISHED)
         self.assertEqual(payment.status, Payment.Status.FAILED)
+        movements = list(
+            StockMovement.objects.filter(product=self.product)
+            .order_by("created_at")
+            .values_list("movement_type", "quantity_delta")
+        )
+        self.assertEqual(
+            movements,
+            [
+                (StockMovement.MovementType.SALE, -5),
+                (StockMovement.MovementType.CANCELLATION, 5),
+            ],
+        )
 
     def test_paid_order_cannot_be_cancelled_without_refund_flow(self):
         order = self.create_order([{"product_id": str(self.product.pk), "quantity": 1}])

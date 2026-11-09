@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { Trash2 } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { SectionHeading, LoadingBlock } from "../components/ui/StatusBlocks";
@@ -24,7 +25,7 @@ const CONDITIONS = [
 const EMPTY_FORM = {
   item_type: "product", title: "", description: "", category: "", price: "", currency: "USD", price_unit: "fixed", condition: "bon_etat",
   city: "", country: "", stock_quantity: 1, shipping_cost: 0, sale_method: "delivery", status: "draft",
-  image_1: "", image_2: "", image_3: "",
+  image_1: "", image_2: "", image_3: "", variants: [],
 };
 
 export default function ListingFormPage() {
@@ -41,6 +42,7 @@ export default function ListingFormPage() {
   const [selectedCountryCode, setSelectedCountryCode] = useState("");
   const [selectedAreaId, setSelectedAreaId] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
+  const [originalStockQuantity, setOriginalStockQuantity] = useState(null);
   const [loading, setLoading] = useState(isEdit);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -107,6 +109,7 @@ export default function ListingFormPage() {
     if (!isEdit) return;
     fetchProductForEdit(id)
       .then((p) => {
+        setOriginalStockQuantity(p.stock_quantity);
         setForm({
           title: p.title,
           item_type: p.item_type || "product",
@@ -119,6 +122,10 @@ export default function ListingFormPage() {
           city: p.city,
           country: p.country,
           stock_quantity: p.stock_quantity,
+          variants: (p.variants || []).map((variant) => ({
+            ...variant,
+            attributesText: Object.entries(variant.attributes || {}).map(([key, value]) => `${key}=${value}`).join(", "),
+          })),
           shipping_cost: p.shipping_cost,
           sale_method: p.sale_method || "delivery",
           status: p.status,
@@ -132,6 +139,33 @@ export default function ListingFormPage() {
   }, [id, isEdit]);
 
   const update = (field) => (value) => setForm((f) => ({ ...f, [field]: value }));
+  function addVariant() {
+    setForm((current) => ({
+      ...current,
+      variants: [...current.variants, {
+        label: "",
+        attributes: {},
+        attributesText: "",
+        stock_quantity: current.variants.length ? 0 : Number(current.stock_quantity || 0),
+      }],
+    }));
+  }
+
+  function updateVariant(index, field, value) {
+    setForm((current) => ({
+      ...current,
+      variants: current.variants.map((variant, variantIndex) => variantIndex === index
+        ? { ...variant, [field]: value }
+        : variant),
+    }));
+  }
+
+  function removeVariant(index) {
+    setForm((current) => ({
+      ...current,
+      variants: current.variants.filter((_, variantIndex) => variantIndex !== index),
+    }));
+  }
   const inputClass = cx(
     "w-full rounded-xl border px-4 py-2.5 text-sm outline-none focus:border-indigo-500",
     t.inputBg, t.border, t.textPrimary
@@ -180,7 +214,22 @@ export default function ListingFormPage() {
       condition: form.item_type === "product" ? form.condition : "",
       city: form.city,
       country: form.country,
-      stock_quantity: form.item_type === "product" ? Number(form.stock_quantity) : 1,
+      stock_quantity: form.item_type === "product"
+        ? form.variants.length
+          ? form.variants.reduce((total, variant) => total + Number(variant.stock_quantity || 0), 0)
+          : Number(form.stock_quantity)
+        : 1,
+      ...(form.item_type === "product" && form.variants.length > 0 ? {
+        variants: form.variants.map((variant) => ({
+          ...(variant.id ? { id: variant.id } : {}),
+          label: variant.label,
+          attributes: Object.fromEntries((variant.attributesText || "").split(",").map((pair) => pair.trim().split("=")).filter(([key, value]) => key && value).map(([key, value]) => [key.trim(), value.trim()])),
+          stock_quantity: Number(variant.stock_quantity),
+        })),
+      } : {}),
+      ...(isEdit && form.item_type === "product"
+        ? { expected_stock_quantity: originalStockQuantity }
+        : {}),
       shipping_cost: form.item_type === "product" ? form.shipping_cost : 0,
       sale_method: form.item_type === "product" ? form.sale_method : "delivery",
       status: form.status,
@@ -223,6 +272,7 @@ export default function ListingFormPage() {
                       if (value === "product" && !form.condition) update("condition")("bon_etat");
                       if (value === "product" && categories.some((category) => category.id === form.category && category.slug === "services")) update("category")("");
                       if (value === "service") {
+                        setForm((current) => ({ ...current, variants: [] }));
                         const servicesCategory = categories.find((category) => category.slug === "services");
                         if (servicesCategory) update("category")(servicesCategory.id);
                       }
@@ -347,14 +397,28 @@ export default function ListingFormPage() {
               <TextField label="Pays affiché" value={form.country} onChange={update("country")} required t={t} />
             </div>
 
-            {form.item_type === "product" && <TextField
-              label="Stock disponible"
-              type="number"
-              value={form.stock_quantity}
-              onChange={update("stock_quantity")}
-              required
-              t={t}
-            />}
+            {form.item_type === "product" && (
+              <section className="flex flex-col gap-3" aria-label="Gestion du stock">
+                {form.variants.length === 0 ? (
+                  <TextField label="Stock disponible" type="number" value={form.stock_quantity} onChange={update("stock_quantity")} required t={t} />
+                ) : (
+                  <p className={cx("text-sm font-medium", t.textPrimary)}>
+                    Stock total : {form.variants.reduce((total, variant) => total + Number(variant.stock_quantity || 0), 0)} unité(s)
+                  </p>
+                )}
+                {form.variants.map((variant, index) => (
+                  <div key={variant.id || `variant-${index}`} className={cx("grid grid-cols-1 gap-3 rounded-xl border p-3 sm:grid-cols-[1fr_1fr_8rem_auto]", t.border, t.cardBg)}>
+                    <TextField label="Variante" value={variant.label} onChange={(value) => updateVariant(index, "label", value)} required t={t} />
+                    <TextField label="Attributs (taille=M, couleur=Noir)" value={variant.attributesText || ""} onChange={(value) => updateVariant(index, "attributesText", value)} t={t} />
+                    <TextField label="Quantité" type="number" value={variant.stock_quantity} onChange={(value) => updateVariant(index, "stock_quantity", value)} required t={t} />
+                    <button type="button" onClick={() => removeVariant(index)} disabled={form.variants.length === 1} aria-label={`Retirer la variante ${variant.label || index + 1}`} className="self-end rounded-lg border border-rose-200 p-2 text-rose-600 disabled:opacity-40">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                <button type="button" onClick={addVariant} className="self-start text-sm font-semibold text-indigo-600 hover:underline">Ajouter une variante</button>
+              </section>
+            )}
 
             <div>
               <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>
@@ -402,7 +466,15 @@ export default function ListingFormPage() {
               </select>
             </label>
 
-            <Button type="submit" loading={saving}>{isEdit ? "Enregistrer" : "Publier l'annonce"}</Button>
+            <Button
+              type="submit"
+              loading={saving}
+              disabled={saving || Object.values(uploadingImages).some(Boolean)}
+            >
+              {Object.values(uploadingImages).some(Boolean)
+                ? "Préparation des photos…"
+                : isEdit ? "Enregistrer" : "Publier l'annonce"}
+            </Button>
           </form>
         )}
       </div>

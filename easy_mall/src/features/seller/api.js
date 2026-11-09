@@ -16,6 +16,11 @@ export const deleteSale = (itemId) => apiRequest(`/orders/my-sales/${itemId}/`, 
 
 export const fetchConfirmedSalesCount = () => apiRequest("/orders/my-sales/confirmed-count/");
 
+export const fetchStockHistory = (productId) =>
+	apiRequest(`/catalog/products/${productId}/stock_history/`).then(unwrap);
+
 export const markSaleShipped = (itemId) => apiRequest(`/orders/my-sales/${itemId}/mark_shipped/`, { method: "POST" });
 
 export const fetchWallet = () => apiRequest("/payments/wallet/");
+
+export const fetchPaymentConfig = () => apiRequest("/payments/config/");

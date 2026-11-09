@@ -2,6 +2,9 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from catalog.models import Category, Product
+from orders.models import Order, OrderItem
+from payments.models import Commission
 
 
 class GlobalStatsAPITests(TestCase):
@@ -54,3 +57,115 @@ class GlobalStatsAPITests(TestCase):
 		self.assertIn("active_listings", response.data["products"])
 		self.assertIn("pending", response.data["verification"])
 		self.assertIn("no-store", response.headers["Cache-Control"])
+
+	def test_admin_revenue_uses_delivered_orders_and_recorded_commissions(self):
+		delivered = Order.objects.create(
+			buyer=self.buyer,
+			status=Order.Status.DELIVERED,
+			total_amount="60.00",
+			currency="USD",
+		)
+		Order.objects.create(
+			buyer=self.buyer,
+			status=Order.Status.PENDING,
+			total_amount="900.00",
+			currency="USD",
+		)
+		Commission.objects.create(order=delivered, rate="5.00", amount="3.00")
+		self.client.force_authenticate(self.staff)
+
+		response = self.client.get(self.url)
+
+		self.assertEqual(response.status_code, 200, response.content)
+		self.assertEqual(response.data["revenue"]["gmv_by_currency"]["USD"], 60)
+		self.assertEqual(
+			response.data["revenue"]["commissions_by_currency"]["USD"], 3
+		)
+
+
+class SellerStatsAPITests(TestCase):
+	def setUp(self):
+		self.client = APIClient()
+		self.buyer = User.objects.create_user(
+			email="seller-stats-buyer@mall.test",
+			phone_number="+243000000021",
+			username="sellerstatsbuyer",
+			password="Buyer123!",
+		)
+		self.seller = User.objects.create_user(
+			email="seller-stats@mall.test",
+			phone_number="+243000000022",
+			username="sellerstats",
+			password="Seller123!",
+		)
+		self.other_seller = User.objects.create_user(
+			email="other-seller-stats@mall.test",
+			phone_number="+243000000023",
+			username="othersellerstats",
+			password="Seller123!",
+		)
+		category = Category.objects.create(name="Seller stats")
+		self.product = Product.objects.create(
+			seller=self.seller,
+			category=category,
+			title="Produit du vendeur",
+			description="Test",
+			price="30.00",
+			currency="USD",
+			city="Kinshasa",
+			country="RDC",
+			views_count=12,
+			favorites_count=3,
+		)
+		self.other_product = Product.objects.create(
+			seller=self.other_seller,
+			category=category,
+			title="Produit privé",
+			description="Test",
+			price="200.00",
+			currency="USD",
+			city="Kinshasa",
+			country="RDC",
+		)
+
+	def add_order_item(self, buyer, seller, product, status, quantity):
+		order = Order.objects.create(
+			buyer=buyer,
+			status=status,
+			total_amount=str(product.price * quantity),
+			currency=product.currency,
+		)
+		OrderItem.objects.create(
+			order=order,
+			product=product,
+			seller=seller,
+			product_title=product.title,
+			quantity=quantity,
+			unit_price=product.price,
+		)
+		return order
+
+	def test_seller_stats_are_scoped_and_exclude_unfinished_sales(self):
+		self.add_order_item(
+			self.buyer, self.seller, self.product, Order.Status.DELIVERED, 2
+		)
+		self.add_order_item(
+			self.buyer, self.seller, self.product, Order.Status.PENDING, 4
+		)
+		self.add_order_item(
+			self.buyer, self.other_seller, self.other_product, Order.Status.DELIVERED, 8
+		)
+		self.client.force_authenticate(self.seller)
+
+		response = self.client.get("/api/v1/analytics/seller/?period=daily")
+
+		self.assertEqual(response.status_code, 200, response.content)
+		self.assertEqual(response.data["products"]["total"], 1)
+		self.assertEqual(response.data["sales"]["units"], 2)
+		self.assertEqual(response.data["sales"]["orders"], 1)
+		self.assertEqual(response.data["sales"]["orders_received"], 2)
+		self.assertEqual(response.data["sales"]["orders_pending"], 1)
+		self.assertEqual(response.data["transactions"]["successful"], 1)
+		self.assertEqual(response.data["sales"]["revenue_by_currency"][0]["amount"], 60)
+		self.assertEqual(response.data["sales"]["top_products"][0]["product_title"], self.product.title)
+		self.assertEqual(response.data["sales"]["series"][0]["units"], 2)

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { MapPin, Star, Package, ShoppingBag, Settings, Heart, MessageCircle } from "lucide-react";
+import { MapPin, Star, Package, ShoppingBag, Settings, Heart, MessageCircle, Facebook, CalendarDays, Share2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
@@ -20,6 +20,8 @@ export default function ProfilePage() {
   const navigate = useNavigate();
   const { t } = useTheme();
   const { user, isAuthenticated } = useAuth();
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [shareNotice, setShareNotice] = useState("");
   const [state, setState] = useState({ loading: true, error: null, profile: null, products: [], reviews: [], sellerFavorite: null, favoriteSaving: false });
 
   useEffect(() => {
@@ -75,7 +77,27 @@ export default function ProfilePage() {
     }
   }
 
+  async function handleShareShop() {
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: shopName, url: shopUrl });
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shopUrl);
+      } else {
+        setShareNotice(shopUrl);
+        return;
+      }
+      setShareNotice("Lien de la boutique prêt à partager.");
+    } catch (error) {
+      if (error.name !== "AbortError") setShareNotice("Le partage n’a pas abouti.");
+    }
+  }
+
   const { loading, error, profile, products, reviews } = state;
+  const shopUrl = typeof window === "undefined" ? "" : window.location.href;
+  const shopName = profile?.shop_name || profile?.username || "Boutique";
+  const categoryOptions = [...new Map(products.filter((product) => product.category).map((product) => [product.category, product.category_name || "Autres"])).entries()];
+  const visibleProducts = categoryFilter === "all" ? products : products.filter((product) => product.category === categoryFilter);
 
   return (
     <div className={cx("min-h-screen transition-colors duration-300", t.pageBg, t.textPrimary)}>
@@ -88,6 +110,11 @@ export default function ProfilePage() {
           <ErrorBlock message={error} t={t} />
         ) : (
           <>
+            {profile.shop_cover_url && (
+              <div className="mb-5 h-40 overflow-hidden rounded-xl sm:h-56">
+                <img src={profile.shop_cover_url} alt={`Bannière de ${shopName}`} className="h-full w-full object-cover" />
+              </div>
+            )}
             <div
               className={cx(
                 "flex flex-col items-center gap-4 rounded-2xl border p-8 text-center sm:flex-row sm:text-left",
@@ -95,15 +122,15 @@ export default function ProfilePage() {
                 t.cardBg
               )}
             >
-              {profile.avatar_url ? (
+              {profile.shop_logo_url || profile.avatar_url ? (
                 <ProfilePhotoViewer
-                  src={profile.avatar_url}
-                  alt={`Photo de profil de ${profile.username}`}
-                  title={`Photo de ${profile.full_name || profile.username}`}
+                  src={profile.shop_logo_url || profile.avatar_url}
+                  alt={`Logo de ${shopName}`}
+                  title={shopName}
                   showTriggerOverlay
                   className="h-20 w-20 shrink-0 overflow-hidden rounded-full ring-2 ring-white shadow-md"
                 >
-                  <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
+                  <img src={profile.shop_logo_url || profile.avatar_url} alt="" className="h-full w-full object-cover" />
                 </ProfilePhotoViewer>
               ) : (
                 <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-3xl font-semibold text-white">
@@ -111,7 +138,7 @@ export default function ProfilePage() {
                 </div>
               )}
               <div>
-                <h1 className={cx("text-2xl font-semibold", t.textPrimary)}>{profile.full_name || profile.username}</h1>
+                <h1 className={cx("text-2xl font-semibold", t.textPrimary)}>{shopName}</h1>
                 <p className={cx("text-sm", t.textMuted)}>@{profile.username}</p>
                 <p className={cx("mt-1 text-xs font-medium uppercase tracking-wide", t.textMuted)}>
                   {profile.seller_type_display || (profile.seller_type === "professional" ? "Commerçant professionnel" : "Particulier")}
@@ -129,11 +156,12 @@ export default function ProfilePage() {
                     ))}
                   </div>
                 )}
-                {profile.shop_name && (
-                  <p className={cx("mt-1 text-sm font-semibold text-indigo-600", t.textMuted)}>{profile.shop_name}</p>
-                )}
-                {profile.bio && <p className={cx("mt-2 text-sm", t.textMuted)}>{profile.bio}</p>}
                 {profile.shop_description && <p className={cx("mt-2 text-sm", t.textMuted)}>{profile.shop_description}</p>}
+                {profile.date_joined && (
+                  <p className={cx("mt-2 flex items-center justify-center gap-1 text-xs sm:justify-start", t.textMuted)}>
+                    <CalendarDays className="h-3 w-3" /> Boutique depuis {new Intl.DateTimeFormat("fr", { month: "long", year: "numeric" }).format(new Date(profile.date_joined))}
+                  </p>
+                )}
                 {(profile.public_location_display || profile.city) && (
                   <p className={cx("mt-1 flex items-center justify-center gap-1 text-xs sm:justify-start", t.textMuted)}>
                     <MapPin className="h-3 w-3" /> {profile.public_location_display || profile.city}
@@ -172,22 +200,54 @@ export default function ProfilePage() {
                   </button>
                 </div>
               )}
+              <div className="flex gap-2 sm:ml-auto">
+                <button type="button" onClick={handleShareShop} aria-label="Partager la boutique avec une autre application" title="Autres applications" className={cx("rounded-full border p-2", t.border, t.textPrimary)}>
+                  <Share2 className="h-4 w-4" />
+                </button>
+                <a href={`https://wa.me/?text=${encodeURIComponent(`${shopName} : ${shopUrl}`)}`} target="_blank" rel="noreferrer" aria-label="Partager la boutique sur WhatsApp" title="WhatsApp" className={cx("rounded-full border p-2", t.border, t.textPrimary)}>
+                  <MessageCircle className="h-4 w-4" />
+                </a>
+                <a href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shopUrl)}`} target="_blank" rel="noreferrer" aria-label="Partager la boutique sur Facebook" title="Facebook" className={cx("rounded-full border p-2", t.border, t.textPrimary)}>
+                  <Facebook className="h-4 w-4" />
+                </a>
+              </div>
             </div>
 
             <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
               <StatCard icon={Star} label="Note moyenne" value={Number(profile.average_rating || 0).toFixed(1)} t={t} />
               <StatCard icon={Package} label="Annonces publiées" value={products.length} t={t} />
               <StatCard icon={ShoppingBag} label="Ventes" value={profile.total_sales} t={t} />
-              <StatCard icon={ShoppingBag} label="Achats" value={profile.total_purchases} t={t} />
             </div>
+            {shareNotice && <p role="status" className={cx("mt-2 break-all text-xs", t.textMuted)}>{shareNotice}</p>}
+
+            {profile.delivery_options?.length > 0 && (
+              <section className="mt-8" aria-label="Informations de livraison">
+                <SectionHeading title="Livraison et remise" t={t} />
+                <ul className="flex flex-wrap gap-x-6 gap-y-2">
+                  {profile.delivery_options.map((option) => (
+                    <li key={`${option.mode}-${option.estimated_delivery_days}`} className={cx("text-sm", t.textMuted)}>
+                      {option.mode}{option.estimated_delivery_days > 0 ? ` · ${option.estimated_delivery_days} jour(s) estimé(s)` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             <div className="mt-10">
               <SectionHeading title="Annonces publiées" t={t} />
-              {products.length === 0 ? (
+              {categoryOptions.length > 0 && (
+                <div className="mb-4 flex flex-wrap gap-2" aria-label="Filtrer par catégorie">
+                  <button type="button" onClick={() => setCategoryFilter("all")} aria-pressed={categoryFilter === "all"} className={cx("rounded-full border px-3 py-1.5 text-xs font-semibold", t.border, categoryFilter === "all" ? "bg-indigo-600 text-white" : t.textMuted)}>Toutes</button>
+                  {categoryOptions.map(([id, name]) => (
+                    <button key={id} type="button" onClick={() => setCategoryFilter(id)} aria-pressed={categoryFilter === id} className={cx("rounded-full border px-3 py-1.5 text-xs font-semibold", t.border, categoryFilter === id ? "bg-indigo-600 text-white" : t.textMuted)}>{name}</button>
+                  ))}
+                </div>
+              )}
+              {visibleProducts.length === 0 ? (
                 <p className={cx("text-sm", t.textMuted)}>Aucune annonce publiée pour l'instant.</p>
               ) : (
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                  {products.map((p, i) => (
+                  {visibleProducts.map((p, i) => (
                     <ProductCard key={p.id} product={p} index={i} t={t} />
                   ))}
                 </div>

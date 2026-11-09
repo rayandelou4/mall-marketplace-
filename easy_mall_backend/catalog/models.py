@@ -259,11 +259,106 @@ class Product(models.Model):
     def is_available(self):
         return (
             not self.is_suspended
-            and self.item_type == self.ItemType.PRODUCT
             and self.status == self.Status.PUBLISHED
             and self.moderation_status == self.ModerationStatus.APPROVED
-            and self.stock_quantity > 0
+            and (
+                self.item_type == self.ItemType.SERVICE
+                or self.stock_quantity > 0
+            )
         )
+
+
+class ProductVariant(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="variants")
+    label = models.CharField(max_length=100)
+    attributes = models.JSONField(default=dict, blank=True)
+    stock_quantity = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "product_variants"
+        ordering = ["label"]
+        constraints = [
+            models.UniqueConstraint(fields=["product", "label"], name="unique_product_variant_label")
+        ]
+
+    def __str__(self):
+        return f"{self.product.title} — {self.label}"
+
+
+class StockMovement(models.Model):
+    class MovementType(models.TextChoices):
+        OPENING = "opening", _("Stock initial")
+        ADJUSTMENT = "adjustment", _("Ajustement vendeur")
+        SALE = "sale", _("Commande")
+        CANCELLATION = "cancellation", _("Annulation")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.ForeignKey(
+        Product, on_delete=models.SET_NULL, null=True, blank=True, related_name="stock_movements"
+    )
+    variant = models.ForeignKey(
+        ProductVariant, on_delete=models.SET_NULL, null=True, blank=True, related_name="stock_movements"
+    )
+    variant_label = models.CharField(max_length=100, blank=True)
+    product_title = models.CharField(max_length=150)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="stock_movements",
+    )
+    order = models.ForeignKey(
+        "orders.Order", on_delete=models.SET_NULL, null=True, blank=True, related_name="stock_movements"
+    )
+    movement_type = models.CharField(max_length=20, choices=MovementType.choices)
+    quantity_delta = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "stock_movements"
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["product", "created_at"])]
+
+
+class ProductActivity(models.Model):
+    class ActivityType(models.TextChoices):
+        VIEW = "view", _("Consultation")
+        CART_ADD = "cart_add", _("Ajout au panier")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="activities"
+    )
+    activity_type = models.CharField(max_length=12, choices=ActivityType.choices)
+    visitor_id = models.UUIDField()
+    event_id = models.UUIDField(unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["product", "activity_type", "created_at"], name="product_activity_lookup_idx")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "activity_type", "visitor_id"],
+                condition=models.Q(activity_type="view"),
+                name="unique_product_viewer",
+            )
+        ]
+
+    class Meta:
+        db_table = "product_activities"
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "activity_type", "visitor_id"],
+                condition=models.Q(activity_type="view"),
+                name="unique_product_visitor_view",
+            )
+        ]
+        indexes = [models.Index(fields=["product", "activity_type"])]
 
 
 class ProductImage(models.Model):

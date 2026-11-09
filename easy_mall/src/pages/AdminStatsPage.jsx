@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { Users, Package, ShoppingBag, AlertTriangle, Star, TrendingUp, Store, ShieldCheck } from "lucide-react";
+import { Users, Package, ShoppingBag, AlertTriangle, Star, TrendingUp, Store, ShieldCheck, Flag, MessageCircle, Ban } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { SectionHeading, LoadingBlock, ErrorBlock } from "../components/ui/StatusBlocks";
@@ -85,6 +85,10 @@ export default function AdminStatsPage() {
               <StatCard icon={ShieldCheck} label="Vérifications en attente" value={data.verification.pending} t={t} />
               <StatCard icon={ShoppingBag} label="Commandes totales" value={data.orders.total} t={t} />
               <StatCard icon={AlertTriangle} label="Litiges ouverts" value={data.moderation.open_disputes} t={t} />
+              <StatCard icon={Flag} label="Signalements annonces" value={data.moderation.open_product_reports} t={t} />
+              <StatCard icon={MessageCircle} label="Signalements messages" value={data.moderation.open_message_reports} t={t} />
+              <StatCard icon={AlertTriangle} label="Signalements à risque" value={data.moderation.high_risk_product_reports} t={t} />
+              <StatCard icon={Ban} label="Comptes suspendus" value={data.moderation.suspended_accounts} t={t} />
               <StatCard icon={Star} label="Avis publiés" value={data.reviews.total} t={t} />
               <StatCard icon={TrendingUp} label="Annonces vendues" value={data.products.sold} t={t} />
             </div>
@@ -104,6 +108,15 @@ export default function AdminStatsPage() {
                 t={t}
                 empty="Aucune commande pour l'instant."
                 rows={Object.entries(data.revenue.gmv_by_currency).map(([currency, total]) => [
+                  currency,
+                  formatPrice(total, currency),
+                ])}
+              />
+              <BreakdownCard
+                title="Commissions enregistrées"
+                t={t}
+                empty="Aucune commission enregistrée."
+                rows={Object.entries(data.revenue.commissions_by_currency).map(([currency, total]) => [
                   currency,
                   formatPrice(total, currency),
                 ])}

@@ -10,4 +10,5 @@ app_name = "analytics"
 
 urlpatterns = [
     path("stats/", views.GlobalStatsView.as_view(), name="global-stats"),
+    path("seller/", views.SellerStatsView.as_view(), name="seller-stats"),
 ]

@@ -1,8 +1,10 @@
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APITestCase
+from rest_framework.exceptions import ValidationError
 
-from .models import Category, Product, ProductIdentity, SellerFavorite
+from .models import Category, Product, ProductActivity, ProductIdentity, SellerFavorite, StockMovement
+from .serializers import ProductCreateUpdateSerializer
 
 
 class ProductVisibilityTests(APITestCase):
@@ -88,7 +90,7 @@ class ProductVisibilityTests(APITestCase):
         self.assertEqual(product.status, Product.Status.PUBLISHED)
         self.assertEqual(product.moderation_status, Product.ModerationStatus.APPROVED)
 
-    def test_seller_phone_is_returned_only_to_authenticated_product_viewers(self):
+    def test_seller_phone_requires_explicit_consent_and_authenticated_viewer(self):
         product = self.create_product(Product.Status.PUBLISHED)
         detail_url = reverse("catalog:product-detail", kwargs={"pk": product.id})
 
@@ -97,7 +99,16 @@ class ProductVisibilityTests(APITestCase):
 
         self.client.force_authenticate(self.other_user)
         authenticated_response = self.client.get(detail_url)
-        self.assertEqual(authenticated_response.data["seller_phone_number"], self.seller.phone_number)
+        self.assertIsNone(authenticated_response.data["seller_phone_number"])
+
+        self.seller.show_phone_on_listings = True
+        self.seller.save(update_fields=["show_phone_on_listings"])
+        consented_response = self.client.get(detail_url)
+        self.assertEqual(consented_response.data["seller_phone_number"], self.seller.phone_number)
+
+        self.client.force_authenticate(user=None)
+        anonymous_consented_response = self.client.get(detail_url)
+        self.assertIsNone(anonymous_consented_response.data["seller_phone_number"])
 
     def test_authenticated_user_cannot_update_another_sellers_product(self):
         product = self.create_product(Product.Status.PUBLISHED)
@@ -396,3 +407,155 @@ class ProductComparisonTests(APITestCase):
         self.assertEqual(result["comparison_offer_count"], 2)
         self.assertEqual(result["comparison_seller_count"], 2)
         self.assertEqual(result["comparison_lowest_price"], "190.00")
+
+
+class ProductStockMovementTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.seller = User.objects.create_user(
+            email="stock-seller@example.com",
+            phone_number="+243900000091",
+            username="stock-seller",
+            password="password123",
+        )
+        self.category = Category.objects.create(name="Stock test")
+
+    def save_product(self, data, instance=None):
+        if instance and "stock_quantity" in data and "expected_stock_quantity" not in data:
+            data = {**data, "expected_stock_quantity": instance.stock_quantity}
+        serializer = ProductCreateUpdateSerializer(
+            instance,
+            data=data,
+            partial=instance is not None,
+            context={"request": type("Request", (), {"user": self.seller})()},
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        return serializer.save()
+
+    def test_opening_adjustment_and_restock_are_recorded(self):
+        product = self.save_product({
+            "title": "Article de stock",
+            "description": "Description",
+            "category": str(self.category.pk),
+            "price": "20.00",
+            "currency": "USD",
+            "condition": "bon_etat",
+            "city": "Kinshasa",
+            "country": "RDC",
+            "stock_quantity": 2,
+            "status": Product.Status.PUBLISHED,
+            "images": [],
+        })
+        self.assertEqual(
+            StockMovement.objects.get(product=product).quantity_delta, 2
+        )
+
+        product = self.save_product({"stock_quantity": 0}, instance=product)
+        self.assertEqual(product.status, Product.Status.SOLD)
+        product = self.save_product({"stock_quantity": 3}, instance=product)
+        self.assertEqual(product.status, Product.Status.PUBLISHED)
+        self.assertEqual(
+            list(
+                StockMovement.objects.filter(product=product)
+                .order_by("created_at")
+                .values_list("quantity_delta", flat=True)
+            ),
+            [2, -2, 3],
+        )
+
+    def test_stale_stock_edit_cannot_overwrite_a_concurrent_sale(self):
+        product = self.save_product({
+            "title": "Article concurrent",
+            "description": "Description",
+            "category": str(self.category.pk),
+            "price": "20.00",
+            "currency": "USD",
+            "condition": "bon_etat",
+            "city": "Kinshasa",
+            "country": "RDC",
+            "stock_quantity": 4,
+            "status": Product.Status.PUBLISHED,
+            "images": [],
+        })
+        Product.objects.filter(pk=product.pk).update(stock_quantity=3)
+
+        serializer = ProductCreateUpdateSerializer(
+            product,
+            data={"stock_quantity": 5, "expected_stock_quantity": 4},
+            partial=True,
+            context={"request": type("Request", (), {"user": self.seller})()},
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        with self.assertRaises(ValidationError):
+            serializer.save()
+
+        product.refresh_from_db()
+        self.assertEqual(product.stock_quantity, 3)
+
+    def test_stock_quantity_is_in_seller_product_list(self):
+        product = self.save_product({
+            "title": "Article visible",
+            "description": "Description",
+            "category": str(self.category.pk),
+            "price": "20.00",
+            "currency": "USD",
+            "condition": "bon_etat",
+            "city": "Kinshasa",
+            "country": "RDC",
+            "stock_quantity": 7,
+            "status": Product.Status.PUBLISHED,
+            "images": [],
+        })
+        self.client.force_authenticate(self.seller)
+
+        response = self.client.get(reverse("catalog:product-mine"))
+
+        self.assertEqual(response.status_code, 200)
+        result = next(item for item in response.data["results"] if item["id"] == str(product.pk))
+        self.assertEqual(result["stock_quantity"], 7)
+
+
+class ProductActivityTests(APITestCase):
+    def test_product_view_is_unique_per_visitor(self):
+        User = get_user_model()
+        seller = User.objects.create_user(
+            email="activity-seller@example.com",
+            phone_number="+243900000099",
+            username="activity-seller",
+            password="password123",
+        )
+        category = Category.objects.create(name="Activity test")
+        product = Product.objects.create(
+            seller=seller,
+            category=category,
+            title="Article consulté",
+            description="Test",
+            price="10.00",
+            currency="USD",
+            city="Kinshasa",
+            country="RDC",
+            stock_quantity=1,
+            status=Product.Status.PUBLISHED,
+            moderation_status=Product.ModerationStatus.APPROVED,
+        )
+        visitor_id = "e220b04a-7fd2-4c12-a7be-f301472a9182"
+        url = f"/api/v1/catalog/products/{product.pk}/track_activity/"
+
+        first = self.client.post(url, {
+            "activity_type": "view",
+            "visitor_id": visitor_id,
+            "event_id": "4e2eb623-f19d-4c13-ab24-11baf47cd6ee",
+        }, format="json")
+        second = self.client.post(url, {
+            "activity_type": "view",
+            "visitor_id": visitor_id,
+            "event_id": "f33bb36e-8ee8-48df-b85b-c9806f12f842",
+        }, format="json")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.data["recorded"])
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(second.data["recorded"])
+        product.refresh_from_db()
+        self.assertEqual(product.views_count, 1)
+        self.assertEqual(ProductActivity.objects.filter(product=product).count(), 1)

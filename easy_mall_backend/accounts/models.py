@@ -94,6 +94,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     email = models.EmailField(_("adresse e-mail"), unique=True)
     phone_number = models.CharField(_("numéro de téléphone"), max_length=20, unique=True)
+    show_phone_on_listings = models.BooleanField(default=False)
     username = models.SlugField(_("nom d'utilisateur"), max_length=50, unique=True)
 
     first_name = models.CharField(_("prénom"), max_length=100, blank=True)

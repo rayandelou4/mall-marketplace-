@@ -12,9 +12,13 @@ function loadInitialCart(storageKey) {
   }
 }
 
-function getStockLimit(product) {
-  const stock = Number(product.stock_quantity);
+function getStockLimit(product, variant = null) {
+  const stock = Number(variant ? variant.stock_quantity : product.stock_quantity);
   return Number.isFinite(stock) ? Math.max(0, Math.floor(stock)) : Infinity;
+}
+
+function isSameEntry(item, productId, variantId) {
+  return item.product.id === productId && (item.variant?.id || null) === (variantId || null);
 }
 
 export function CartProvider({ children }) {
@@ -26,39 +30,39 @@ export function CartProvider({ children }) {
     localStorage.setItem(storageKey, JSON.stringify(items));
   }, [items, storageKey]);
 
-  function addItem(product, quantity = 1) {
+  function addItem(product, quantity = 1, visitorId = null, variant = null) {
     setItems((prev) => {
-      const maxQty = getStockLimit(product);
+      const maxQty = getStockLimit(product, variant);
       const requestedQuantity = Math.max(1, Math.floor(Number(quantity) || 1));
       if (maxQty < 1) return prev;
-      const existing = prev.find((i) => i.product.id === product.id);
+      const existing = prev.find((item) => isSameEntry(item, product.id, variant?.id));
       if (existing) {
         return prev.map((i) =>
-          i.product.id === product.id ? { ...i, product, quantity: Math.min(i.quantity + requestedQuantity, maxQty) } : i
+          isSameEntry(i, product.id, variant?.id) ? { ...i, product, variant, visitorId: visitorId || i.visitorId, quantity: Math.min(i.quantity + requestedQuantity, maxQty) } : i
         );
       }
-      return [...prev, { product, quantity: Math.min(requestedQuantity, maxQty) }];
+      return [...prev, { product, variant, quantity: Math.min(requestedQuantity, maxQty), visitorId }];
     });
   }
 
-  function updateQuantity(productId, quantity) {
+  function updateQuantity(productId, quantity, variantId = null) {
     setItems((prev) =>
       quantity <= 0
-        ? prev.filter((i) => i.product.id !== productId)
+        ? prev.filter((item) => !isSameEntry(item, productId, variantId))
         : prev.map((i) => {
-          if (i.product.id !== productId) return i;
+          if (!isSameEntry(i, productId, variantId)) return i;
           const requestedQuantity = Math.floor(Number(quantity));
           if (!Number.isFinite(requestedQuantity)) return i;
           return {
             ...i,
-            quantity: Math.min(Math.max(1, requestedQuantity), Math.max(1, getStockLimit(i.product))),
+            quantity: Math.min(Math.max(1, requestedQuantity), Math.max(1, getStockLimit(i.product, i.variant))),
           };
         })
     );
   }
 
-  function removeItem(productId) {
-    setItems((prev) => prev.filter((i) => i.product.id !== productId));
+  function removeItem(productId, variantId = null) {
+    setItems((prev) => prev.filter((item) => !isSameEntry(item, productId, variantId)));
   }
 
   function clear() {

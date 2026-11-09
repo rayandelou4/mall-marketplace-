@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.translation import ngettext
 
-from .models import Category, Favorite, Product, ProductIdentity, ProductImage, ProductVideo, SavedSearch
+from .models import Category, Favorite, Product, ProductIdentity, ProductImage, ProductVariant, ProductVideo, SavedSearch
 
 
 class ProductImageInline(admin.TabularInline):
@@ -60,6 +60,7 @@ class CategoryAdmin(admin.ModelAdmin):
 
 
 admin.site.register(ProductVideo)
+admin.site.register(ProductVariant)
 admin.site.register(Favorite)
 admin.site.register(SavedSearch)
     

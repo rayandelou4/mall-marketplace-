@@ -15,6 +15,23 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 
+class CheckoutGroup(models.Model):
+    """Regroupe les commandes vendeur issues d'une validation de panier."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    buyer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="checkout_groups"
+    )
+    currency = models.CharField(max_length=3)
+    total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    buyer_purchase_counted = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "checkout_groups"
+        ordering = ["-created_at"]
+
+
 class Order(models.Model):
     """Commande passée par un acheteur — peut contenir des articles de plusieurs vendeurs."""
 
@@ -37,6 +54,13 @@ class Order(models.Model):
     # (traçabilité comptable) — préférer une désactivation (`User.is_active=False`).
     buyer = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="orders"
+    )
+    checkout_group = models.ForeignKey(
+        CheckoutGroup,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders",
     )
 
     status = models.CharField(
@@ -102,6 +126,14 @@ class OrderItem(models.Model):
         null=True,
         related_name="order_items",
     )
+    variant = models.ForeignKey(
+        "catalog.ProductVariant",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_items",
+    )
+    variant_label = models.CharField(max_length=100, blank=True)
     seller = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -110,6 +142,7 @@ class OrderItem(models.Model):
 
     product_title = models.CharField(max_length=150)
     quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+    conversion_visitor_id = models.UUIDField(null=True, blank=True, db_index=True)
     unit_price = models.DecimalField(
         max_digits=12, decimal_places=2, validators=[MinValueValidator(0)]
     )

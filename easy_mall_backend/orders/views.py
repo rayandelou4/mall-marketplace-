@@ -16,6 +16,7 @@ from payments.services import release_order_payment
 
 from .models import Order, OrderItem
 from .serializers import (
+    CheckoutGroupDetailSerializer,
     OrderCancelSerializer,
     OrderCreateSerializer,
     OrderDetailSerializer,
@@ -65,8 +66,11 @@ class OrderViewSet(
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        order = serializer.save()
-        return Response(OrderDetailSerializer(order).data, status=status.HTTP_201_CREATED)
+        checkout_group = serializer.save()
+        return Response(
+            CheckoutGroupDetailSerializer(checkout_group).data,
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
@@ -102,7 +106,17 @@ class OrderViewSet(
             return Response(OrderDetailSerializer(order).data)
 
         order = Order.objects.select_for_update().get(pk=order.pk)
-        if order.status != Order.Status.PENDING:
+        delivery_items = order.items.filter(sale_method="delivery")
+        if delivery_items.exists():
+            if (
+                order.status != Order.Status.SHIPPED
+                or delivery_items.filter(is_shipped=False).exists()
+            ):
+                return Response(
+                    {"detail": "Le vendeur doit signaler l’expédition avant la confirmation de réception."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        elif order.status != Order.Status.PENDING:
             return Response(
                 {"detail": "Seule une commande en attente de remise peut être confirmée."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -111,8 +125,29 @@ class OrderViewSet(
         seller_ids = list(order.items.values_list("seller_id", flat=True).distinct())
         order.status = Order.Status.DELIVERED
         order.save(update_fields=["status"])
-        User.objects.filter(pk=order.buyer_id).update(total_purchases=F("total_purchases") + 1)
         User.objects.filter(pk__in=seller_ids).update(total_sales=F("total_sales") + 1)
+        if order.checkout_group_id:
+            from .models import CheckoutGroup
+
+            checkout_group = CheckoutGroup.objects.select_for_update().get(
+                pk=order.checkout_group_id
+            )
+            unfinished_orders = checkout_group.orders.exclude(
+                status__in=[Order.Status.DELIVERED, Order.Status.CANCELLED]
+            )
+            has_delivered_order = checkout_group.orders.filter(
+                status=Order.Status.DELIVERED
+            ).exists()
+            if not checkout_group.buyer_purchase_counted and not unfinished_orders.exists() and has_delivered_order:
+                checkout_group.buyer_purchase_counted = True
+                checkout_group.save(update_fields=["buyer_purchase_counted"])
+                User.objects.filter(pk=order.buyer_id).update(
+                    total_purchases=F("total_purchases") + 1
+                )
+        else:
+            User.objects.filter(pk=order.buyer_id).update(
+                total_purchases=F("total_purchases") + 1
+            )
         for seller in User.objects.filter(pk__in=seller_ids):
             notify(
                 seller,
@@ -160,17 +195,17 @@ class SellerSalesViewSet(
     @action(detail=True, methods=["post"])
     @transaction.atomic
     def mark_shipped(self, request, pk=None):
-        """Le vendeur signale l'expédition d'une ligne d'une commande cash."""
-        if settings.PAYMENTS_MODE == "cash":
-            return Response(
-                {"detail": "Les commandes sont confirmées par l’acheteur après la remise en main propre."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        """Le vendeur signale l'expédition d'une ligne livrée à l'acheteur."""
         item = self.get_queryset().select_for_update().get(pk=pk)
         order = Order.objects.select_for_update().get(pk=item.order_id)
         if order.payment_method != Order.PaymentMethod.CASH:
             return Response(
                 {"detail": "Le signalement d'expédition est réservé aux commandes en espèces."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if item.sale_method != "delivery":
+            return Response(
+                {"detail": "Seuls les articles à livrer peuvent être marqués comme expédiés."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if order.status not in (Order.Status.PENDING, Order.Status.SHIPPED):
@@ -181,7 +216,7 @@ class SellerSalesViewSet(
         if not item.is_shipped:
             item.is_shipped = True
             item.save(update_fields=["is_shipped"])
-        if not order.items.filter(is_shipped=False).exists():
+        if not order.items.filter(sale_method="delivery", is_shipped=False).exists():
             order.status = Order.Status.SHIPPED
             order.save(update_fields=["status"])
         return Response(OrderItemSerializer(item).data)

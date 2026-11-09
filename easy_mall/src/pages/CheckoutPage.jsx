@@ -37,11 +37,13 @@ export default function CheckoutPage() {
     : currencies.length === 1 ? currencies[0] : "";
   const checkoutItems = items.filter(({ product }) => (product.currency || "USD") === activeCurrency);
   const requiresDelivery = checkoutItems.some(({ product }) => product.sale_method !== "pickup");
-  const hasUnavailableStock = checkoutItems.some(({ product, quantity }) => (
-    product.stock_quantity != null
-    && Number.isFinite(Number(product.stock_quantity))
-    && quantity > Number(product.stock_quantity)
-  ));
+  const hasUnavailableStock = checkoutItems.some(({ product, variant, quantity }) => {
+    if (product.variants?.length && !variant) return true;
+    const available = variant ? variant.stock_quantity : product.stock_quantity;
+    return available != null
+      && Number.isFinite(Number(available))
+      && quantity > Number(available);
+  });
 
   const [privateAddresses, setPrivateAddresses] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState("");
@@ -198,10 +200,10 @@ export default function CheckoutPage() {
             {hasUnavailableStock && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">Le stock disponible a changé pour au moins un article. Retournez au panier et ajustez les quantités.</p>}
             <div className={cx("rounded-2xl border p-4", t.cardBorder, t.cardBg)}>
               <p className={cx("mb-2 text-sm font-semibold", t.textPrimary)}>Récapitulatif {activeCurrency}</p>
-              {checkoutItems.map(({ product, quantity }) => (
-                <div key={product.id} className="flex justify-between gap-4 py-1 text-sm">
+              {checkoutItems.map(({ product, variant, quantity }) => (
+                <div key={`${product.id}:${variant?.id || ""}`} className="flex justify-between gap-4 py-1 text-sm">
                   <span className={t.textMuted}>
-                    {product.title} × {quantity}{product.sale_method === "pickup"
+                    {product.title}{variant ? ` · ${variant.label}` : ""} × {quantity}{product.sale_method === "pickup"
                       ? " · retrait en boutique"
                       : ` · livraison${getItemShippingCost(product) > 0 ? ` ${formatPrice(getItemShippingCost(product), product.currency)}` : ""}`}
                   </span>
@@ -318,7 +320,9 @@ export default function CheckoutPage() {
         {step === "done" && order && (
           <div className={cx("flex flex-col items-center gap-4 rounded-2xl border p-8 text-center", t.cardBorder, t.cardBg)}>
             <CheckCircle2 className="h-10 w-10 text-emerald-500" />
-            <h2 className={cx("text-lg font-semibold", t.textPrimary)}>Commande enregistrée</h2>
+            <h2 className={cx("text-lg font-semibold", t.textPrimary)}>
+              {order.orders?.length > 1 ? "Commandes enregistrées" : "Commande enregistrée"}
+            </h2>
             <p className={cx("max-w-lg text-sm", t.textMuted)}>
               {order.items?.some((item) => item.sale_method === "pickup") && order.items?.some((item) => item.sale_method !== "pickup")
                 ? "Convenez avec les vendeurs, via la messagerie, des modalités de retrait en boutique et de livraison."
@@ -327,6 +331,25 @@ export default function CheckoutPage() {
                   : "Convenez du retrait en boutique avec le vendeur via la messagerie et payez en main propre."}
             </p>
             <p className={cx("text-xs", t.textMuted)}>Commande #{order.id.slice(0, 8)} · {formatPrice(order.total_amount, order.currency)}</p>
+            {order.orders?.length > 0 && (
+              <div className={cx("w-full max-w-lg divide-y border-y text-left", t.border)}>
+                {order.orders.map((sellerOrder) => (
+                  <div key={sellerOrder.id} className="flex items-center justify-between gap-4 py-3 text-sm">
+                    <div className="min-w-0">
+                      <p className={cx("font-semibold", t.textPrimary)}>
+                        {sellerOrder.items?.[0]?.seller_username || "Vendeur"}
+                      </p>
+                      <p className={cx("text-xs", t.textMuted)}>
+                        Commande #{sellerOrder.id.slice(0, 8)} · {sellerOrder.items?.length || 0} article(s)
+                      </p>
+                    </div>
+                    <span className="shrink-0 font-mono text-sm">
+                      {formatPrice(sellerOrder.total_amount, sellerOrder.currency)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex flex-wrap justify-center gap-3">
               <Link to="/mes-commandes" className="inline-flex items-center gap-2 rounded-full bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white">
                 <PackageCheck className="h-4 w-4" /> Mes commandes

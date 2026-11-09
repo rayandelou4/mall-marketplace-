@@ -16,6 +16,7 @@ router.register("providers", views.PaymentProviderViewSet, basename="provider")
 urlpatterns = [
     path("", include(router.urls)),
     path("config/", views.PaymentConfigView.as_view(), name="config"),
+    path("wallet/", views.WalletView.as_view(), name="wallet"),
     path("history/", views.PaymentListView.as_view(), name="history"),
     path("initiate/", views.PaymentInitiateView.as_view(), name="initiate"),
     path("webhook/confirm/", views.PaymentConfirmView.as_view(), name="webhook-confirm"),
