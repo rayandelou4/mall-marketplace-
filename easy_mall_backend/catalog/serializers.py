@@ -141,6 +141,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     price_unit_display = serializers.CharField(
         source="get_price_unit_display", read_only=True
     )
+    category_name = serializers.CharField(source="category.name", read_only=True)
     seller_username = serializers.CharField(source="seller.username", read_only=True)
     seller_avatar_url = serializers.URLField(
         source="seller.avatar_url", read_only=True, allow_null=True
