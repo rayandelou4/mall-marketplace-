@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from .models import Negotiation, NegotiationEvent
@@ -6,11 +8,11 @@ from .models import Negotiation, NegotiationEvent
 class ProposalInputSerializer(serializers.Serializer):
     product_id = serializers.UUIDField()
     variant_id = serializers.UUIDField(required=False, allow_null=True)
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value="0.01")
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal("0.01"))
 
 
 class CounterProposalInputSerializer(serializers.Serializer):
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value="0.01")
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal("0.01"))
 
 
 class NegotiationEventSerializer(serializers.ModelSerializer):
