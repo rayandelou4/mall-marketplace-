@@ -31,6 +31,7 @@ class Category(models.Model):
     )
     icon_url = models.URLField(blank=True, null=True)
     order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         db_table = "categories"
