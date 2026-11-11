@@ -12,6 +12,9 @@ export function TextField({
   hint,
   t,
   maxLength,
+  min,
+  max,
+  step,
   inputMode,
   autoComplete,
 }) {
@@ -25,6 +28,9 @@ export function TextField({
         placeholder={placeholder}
         required={required}
         maxLength={maxLength}
+        min={min}
+        max={max}
+        step={step}
         inputMode={inputMode}
         autoComplete={autoComplete}
         className={cx(

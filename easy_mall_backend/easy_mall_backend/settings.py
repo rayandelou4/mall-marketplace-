@@ -33,6 +33,9 @@ DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 REDIS_URL = env("REDIS_URL", default="redis://localhost:6379/0")  # partagé par Celery et Channels
 PAYMENTS_MODE = env("PAYMENTS_MODE", default="cash")
+SELLER_ASSISTANT_PROVIDER = env("SELLER_ASSISTANT_PROVIDER", default="")
+VISUAL_SEARCH_PROVIDER = env("VISUAL_SEARCH_PROVIDER", default="")
+BUYER_ASSISTANT_PROVIDER = env("BUYER_ASSISTANT_PROVIDER", default="")
 
 # --------------------------------------------------------------------------
 # Apps
@@ -67,12 +70,19 @@ INSTALLED_APPS = [
     "notifications",
     "localization",
     "seller_verification",  # système de certification des vendeurs
+    "promotions",
+    "seller_assistant",
+    "negotiations",
+    "visual_search",
+    "buyer_assistant",
+    "subscriptions",
 ]
 
 AUTH_USER_MODEL = "accounts.User"
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "django.middleware.gzip.GZipMiddleware",
     "corsheaders.middleware.CorsMiddleware",  # doit précéder CommonMiddleware
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -178,6 +188,8 @@ REST_FRAMEWORK = {
         "verification_upload": "10/hour",
         "message_send": "30/minute",
         "conversation_start": "5/hour",
+        "visual_search": "10/hour",
+        "buyer_assistant": "10/hour",
     },
 }
 
@@ -213,6 +225,16 @@ CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=DEBUG)
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULE = {
+    "expire-price-negotiations": {
+        "task": "negotiations.expire_stale_negotiations",
+        "schedule": 60.0,
+    },
+}
+
+NEGOTIATION_MAX_PROPOSALS = env.int("NEGOTIATION_MAX_PROPOSALS", default=5)
+NEGOTIATION_OFFER_TTL_HOURS = env.int("NEGOTIATION_OFFER_TTL_HOURS", default=48)
+NEGOTIATION_RESERVATION_MINUTES = env.int("NEGOTIATION_RESERVATION_MINUTES", default=30)
 
 # --------------------------------------------------------------------------
 # Channels — chat temps réel (apps.messaging). En dev, channel layer en

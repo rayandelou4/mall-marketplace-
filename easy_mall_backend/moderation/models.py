@@ -109,6 +109,14 @@ class ModerationAction(models.Model):
 
 
 class Dispute(models.Model):
+    class Reason(models.TextChoices):
+        NOT_RECEIVED = "not_received", _("Produit non reçu")
+        DAMAGED_ITEM = "damaged_item", _("Produit endommagé")
+        NOT_AS_DESCRIBED = "not_as_described", _("Produit différent de la description")
+        COUNTERFEIT_SUSPECTED = "counterfeit_suspected", _("Produit contrefait ou suspect")
+        SELLER_FRAUD = "seller_fraud", _("Vendeur frauduleux")
+        OTHER = "other", _("Autre problème lié à la transaction")
+
     class Status(models.TextChoices):
         OPEN = "open", _("Ouvert")
         WAITING_SELLER = "waiting_seller", _("En attente du vendeur")
@@ -117,6 +125,13 @@ class Dispute(models.Model):
         RESOLVED = "resolved", _("Résolu")
         REJECTED = "rejected", _("Rejeté")
         CLOSED = "closed", _("Clôturé")
+
+    class RefundStatus(models.TextChoices):
+        NOT_APPLICABLE = "not_applicable", _("Non applicable")
+        PENDING = "pending", _("À traiter")
+        PROCESSING = "processing", _("En cours")
+        COMPLETED = "completed", _("Confirmé")
+        FAILED = "failed", _("Échec")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     order = models.ForeignKey("orders.Order", on_delete=models.CASCADE, related_name="disputes")
@@ -128,7 +143,7 @@ class Dispute(models.Model):
     raised_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="disputes_raised"
     )
-    reason = models.CharField(max_length=40)
+    reason = models.CharField(max_length=40, choices=Reason.choices)
     description = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
     resolution = models.TextField(blank=True)
@@ -153,6 +168,17 @@ class Dispute(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
+    appeal_deadline = models.DateTimeField(null=True, blank=True)
+    appealed_at = models.DateTimeField(null=True, blank=True)
+    refund_status = models.CharField(
+        max_length=20,
+        choices=RefundStatus.choices,
+        default=RefundStatus.NOT_APPLICABLE,
+    )
+    refund_amount = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True
+    )
+    refund_reference = models.CharField(max_length=120, blank=True)
 
     class Meta:
         db_table = "disputes"
@@ -160,6 +186,31 @@ class Dispute(models.Model):
 
     def __str__(self):
         return f"Litige {self.id} — {self.get_status_display()}"
+
+
+class DisputeMessage(models.Model):
+    class Kind(models.TextChoices):
+        MESSAGE = "message", _("Message")
+        APPEAL = "appeal", _("Contestation")
+        DECISION = "decision", _("Décision")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    dispute = models.ForeignKey(Dispute, on_delete=models.CASCADE, related_name="messages")
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dispute_messages",
+    )
+    kind = models.CharField(max_length=12, choices=Kind.choices, default=Kind.MESSAGE)
+    body = models.TextField()
+    evidence = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "dispute_messages"
+        ordering = ["created_at", "id"]
 
 
 class MessageReport(models.Model):
@@ -219,6 +270,7 @@ class MessageReport(models.Model):
 
 class AccountModerationAction(models.Model):
     class Action(models.TextChoices):
+        WARNING = "warning", _("Avertissement")
         SUSPENDED = "suspended", _("Compte suspendu")
         REINSTATED = "reinstated", _("Compte rétabli")
 

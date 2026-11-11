@@ -24,6 +24,8 @@ class CheckoutGroup(models.Model):
     )
     currency = models.CharField(max_length=3)
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    loyalty_points_redeemed = models.PositiveIntegerField(default=0)
+    loyalty_discount_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     buyer_purchase_counted = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -71,6 +73,8 @@ class Order(models.Model):
     )
     hidden_by_buyer = models.BooleanField(default=False)
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    loyalty_points_redeemed = models.PositiveIntegerField(default=0)
+    loyalty_discount_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     currency = models.CharField(max_length=3, default="USD")
     shipping_address = models.TextField(blank=True)
     shipping_address_record = models.ForeignKey(
@@ -133,6 +137,13 @@ class OrderItem(models.Model):
         blank=True,
         related_name="order_items",
     )
+    negotiation = models.ForeignKey(
+        "negotiations.Negotiation",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_items",
+    )
     variant_label = models.CharField(max_length=100, blank=True)
     seller = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -146,7 +157,15 @@ class OrderItem(models.Model):
     unit_price = models.DecimalField(
         max_digits=12, decimal_places=2, validators=[MinValueValidator(0)]
     )
+    original_unit_price = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    promotion_discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    promotion_name = models.CharField(max_length=120, blank=True)
+    loyalty_discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    loyalty_points_redeemed = models.PositiveIntegerField(default=0)
     shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    original_shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     sale_method = models.CharField(
         max_length=10,
         choices=[("delivery", _("Livraison")), ("pickup", _("Remise en main propre"))],
@@ -170,4 +189,4 @@ class OrderItem(models.Model):
 
     @property
     def subtotal(self):
-        return (self.unit_price * self.quantity) + self.shipping_cost
+        return (self.unit_price * self.quantity) + self.shipping_cost - self.loyalty_discount

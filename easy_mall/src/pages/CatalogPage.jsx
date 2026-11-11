@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { RotateCcw, Search, X } from "lucide-react";
+import { ImagePlus, RotateCcw, Search, X } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { ProductCard } from "../components/catalog/ProductCard";
@@ -8,6 +8,7 @@ import { SectionHeading, LoadingBlock, ErrorBlock } from "../components/ui/Statu
 import { useTheme } from "../features/theme/ThemeContext";
 import { useAuth } from "../features/auth/AuthContext";
 import { fetchCategories, fetchProductsPaginated, toggleFavorite, saveSearch } from "../features/catalog/api";
+import { fetchVisualSearchConfig, searchProductsByImage } from "../features/catalog/visualSearchApi";
 import { cx } from "../styles/theme";
 
 const CONDITIONS = [
@@ -18,8 +19,7 @@ const CONDITIONS = [
   { value: "a_reconditionner", label: "À reconditionner" },
 ];
 
-// Doit correspondre à REST_FRAMEWORK["PAGE_SIZE"] dans settings.py (pas de
-// page_size_query_param configuré côté API pour l'instant).
+// Valeur par défaut de REST_FRAMEWORK["PAGE_SIZE"] dans settings.py.
 const PAGE_SIZE = 20;
 
 function flattenCategories(items) {
@@ -65,6 +65,13 @@ export default function CatalogPage() {
   const [saveNotice, setSaveNotice] = useState(null);
   const [searchDraft, setSearchDraft] = useState(filters.search);
   const [cityDraft, setCityDraft] = useState(filters.city);
+  const [visualSearchEnabled, setVisualSearchEnabled] = useState(false);
+  const [visualSearchConfigLoading, setVisualSearchConfigLoading] = useState(true);
+  const [visualSearchImage, setVisualSearchImage] = useState(null);
+  const [visualSearchPreview, setVisualSearchPreview] = useState("");
+  const [visualSearchResults, setVisualSearchResults] = useState(null);
+  const [visualSearchLoading, setVisualSearchLoading] = useState(false);
+  const [visualSearchError, setVisualSearchError] = useState(null);
   const flatCategories = useMemo(() => flattenCategories(categories), [categories]);
 
   const filterError = useMemo(() => {
@@ -82,6 +89,25 @@ export default function CatalogPage() {
   useEffect(() => {
     fetchCategories().then(setCategories).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetchVisualSearchConfig()
+      .then(({ enabled }) => { if (active) setVisualSearchEnabled(Boolean(enabled)); })
+      .catch(() => { if (active) setVisualSearchEnabled(false); })
+      .finally(() => { if (active) setVisualSearchConfigLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!visualSearchImage) {
+      setVisualSearchPreview("");
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(visualSearchImage);
+    setVisualSearchPreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [visualSearchImage]);
 
   useEffect(() => setSearchDraft(filters.search), [filters.search]);
   useEffect(() => setCityDraft(filters.city), [filters.city]);
@@ -162,6 +188,40 @@ export default function CatalogPage() {
     }
   }
 
+  async function handleVisualSearch(event) {
+    event.preventDefault();
+    if (!visualSearchEnabled || !visualSearchImage) return;
+    setVisualSearchLoading(true);
+    setVisualSearchError(null);
+    setVisualSearchResults(null);
+    try {
+      const response = await searchProductsByImage(visualSearchImage);
+      setVisualSearchResults(response.results || []);
+    } catch (error) {
+      setVisualSearchError(error.message);
+    } finally {
+      setVisualSearchLoading(false);
+    }
+  }
+
+  function handleVisualImageChange(file) {
+    setVisualSearchResults(null);
+    setVisualSearchError(null);
+    if (!file) {
+      setVisualSearchImage(null);
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setVisualSearchError("Sélectionnez un fichier image.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setVisualSearchError("La photo ne peut pas dépasser 8 Mo.");
+      return;
+    }
+    setVisualSearchImage(file);
+  }
+
   const totalPages = Math.max(1, Math.ceil(state.count / PAGE_SIZE));
   const inputClass = cx("rounded-xl border px-3 py-2 text-sm", t.border, t.cardBg, t.textPrimary);
   const activeFilters = [
@@ -211,6 +271,71 @@ export default function CatalogPage() {
             Rechercher
           </button>
         </form>
+
+        {filters.item_type !== "service" && (
+          <section className={cx("mb-6 border-y py-4", t.border)} aria-labelledby="visual-search-title">
+            <form onSubmit={handleVisualSearch} className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="min-w-0 flex-1">
+                <h2 id="visual-search-title" className={cx("text-sm font-semibold", t.textPrimary)}>Recherche par photo</h2>
+                <p className={cx("mt-1 text-xs", t.textMuted)}>
+                  {visualSearchConfigLoading
+                    ? "Vérification de la disponibilité…"
+                    : visualSearchEnabled
+                      ? isAuthenticated
+                        ? "Votre photo sera transmise au moteur configuré uniquement lorsque vous lancerez la recherche."
+                        : "Connectez-vous pour lancer une recherche. Votre photo ne sera transmise qu’après votre action."
+                      : "Aucun moteur visuel n’est configuré. Votre photo reste sur cet appareil et aucun résultat fictif ne sera affiché."}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className={cx("inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold", t.border, t.textPrimary)}>
+                  <ImagePlus className="h-4 w-4" />
+                  Choisir une photo
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={(event) => {
+                      handleVisualImageChange(event.target.files?.[0]);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={!visualSearchEnabled || !isAuthenticated || !visualSearchImage || visualSearchLoading || visualSearchConfigLoading}
+                  className="min-h-11 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {visualSearchLoading ? "Recherche…" : "Rechercher"}
+                </button>
+              </div>
+            </form>
+            {visualSearchPreview && (
+              <div className="mt-3 flex items-center gap-3">
+                <img src={visualSearchPreview} alt="Aperçu de la photo sélectionnée" className="h-16 w-16 rounded-lg object-cover" />
+                <span className={cx("min-w-0 truncate text-sm", t.textMuted)}>{visualSearchImage.name}</span>
+                <button type="button" onClick={() => handleVisualImageChange(null)} aria-label="Retirer la photo sélectionnée" className="min-h-11 min-w-11 rounded-lg text-rose-600">
+                  <X className="mx-auto h-4 w-4" />
+                </button>
+              </div>
+            )}
+            {visualSearchError && <p role="alert" className="mt-2 text-sm text-rose-600">{visualSearchError}</p>}
+            {visualSearchResults && (
+              <div className="mt-5">
+                <h3 className={cx("mb-3 text-sm font-semibold", t.textPrimary)}>
+                  Résultats visuels ({visualSearchResults.length})
+                </h3>
+                {visualSearchResults.length ? (
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+                    {visualSearchResults.map((product, index) => (
+                      <ProductCard key={product.id} product={product} index={index} t={t} onToggleFavorite={handleToggleFavorite} />
+                    ))}
+                  </div>
+                ) : <p className={cx("text-sm", t.textMuted)}>Aucun produit similaire trouvé.</p>}
+              </div>
+            )}
+          </section>
+        )}
 
         <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           <select value={filters.item_type} onChange={(e) => updateFilter("item_type", e.target.value)} className={inputClass}>

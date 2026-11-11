@@ -59,9 +59,15 @@ class GlobalStatsView(APIView):
         sellers_by_type = {
             row["seller_type"]: row["count"]
             for row in User.objects.filter(
-                products__status=Product.Status.PUBLISHED,
-                products__moderation_status=Product.ModerationStatus.APPROVED,
-                products__is_suspended=False,
+                Q(is_active=True)
+                & Q(is_suspended=False)
+                & Q(products__status=Product.Status.PUBLISHED)
+                & Q(products__moderation_status=Product.ModerationStatus.APPROVED)
+                & Q(products__is_suspended=False)
+                & (
+                    Q(products__item_type=Product.ItemType.SERVICE)
+                    | Q(products__stock_quantity__gt=0)
+                )
             )
             .values("seller_type")
             .annotate(count=Count("id", distinct=True))
@@ -79,6 +85,7 @@ class GlobalStatsView(APIView):
                     "verified": User.objects.filter(is_email_verified=True).count(),
                 },
                 "sellers": {
+                    "total": sum(sellers_by_type.values()),
                     "individual": sellers_by_type.get(User.SellerType.INDIVIDUAL, 0),
                     "professional": sellers_by_type.get(User.SellerType.PROFESSIONAL, 0),
                 },
@@ -170,7 +177,7 @@ class SellerStatsView(APIView):
             order__status=Order.Status.DELIVERED,
         )
         line_revenue = ExpressionWrapper(
-            F("unit_price") * F("quantity") + F("shipping_cost"),
+            F("unit_price") * F("quantity") + F("shipping_cost") - F("loyalty_discount"),
             output_field=DecimalField(max_digits=14, decimal_places=2),
         )
 
@@ -249,6 +256,12 @@ class SellerStatsView(APIView):
             created_at__gte=start,
         ).count()
         seller_orders = Order.objects.filter(items__seller=request.user).distinct()
+        period_seller_orders = seller_orders.filter(created_at__gte=start)
+        period_revenue_by_currency = list(
+            period_delivered_items.values("order__currency")
+            .annotate(total=Sum(line_revenue))
+            .order_by("order__currency")
+        )
         seller_payments = list(
             Payment.objects.filter(order__items__seller=request.user)
             .values("id", "status", "amount", "currency")
@@ -266,6 +279,19 @@ class SellerStatsView(APIView):
         return Response(
             {
                 "period": period,
+                "period_sales": {
+                    "units": period_delivered_items.aggregate(total=Sum("quantity"))["total"] or 0,
+                    "products_sold": period_delivered_items.exclude(product_id__isnull=True)
+                    .values("product_id")
+                    .distinct()
+                    .count(),
+                    "orders": period_delivered_items.values("order_id").distinct().count(),
+                    "orders_received": period_seller_orders.count(),
+                    "revenue_by_currency": [
+                        {"currency": row["order__currency"], "amount": row["total"]}
+                        for row in period_revenue_by_currency
+                    ],
+                },
                 "products": {
                     "total": product_totals["count"] or 0,
                     "published": product_totals["published"] or 0,

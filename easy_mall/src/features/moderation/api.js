@@ -20,6 +20,14 @@ export function reviewDispute(disputeId, payload) {
   return apiRequest(`/moderation/disputes/${disputeId}/review/`, { method: "POST", body: payload });
 }
 
+export function replyToDispute(disputeId, payload) {
+  return apiRequest(`/moderation/disputes/${disputeId}/reply/`, { method: "POST", body: payload });
+}
+
+export function appealDispute(disputeId, payload) {
+  return apiRequest(`/moderation/disputes/${disputeId}/appeal/`, { method: "POST", body: payload });
+}
+
 export function createMessageReport(payload) {
   return apiRequest("/moderation/message-reports/", { method: "POST", body: payload });
 }

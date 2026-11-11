@@ -78,15 +78,15 @@ async function prepareImage(file) {
   });
 }
 
-export function optimizedImageUrl(url, width) {
+function cloudinaryUrl(url, width) {
   if (!url) return url;
 
   try {
     const imageUrl = new URL(url);
-    if (imageUrl.hostname !== "res.cloudinary.com") return url;
+    if (imageUrl.hostname !== "res.cloudinary.com") return null;
 
     const uploadPath = "/image/upload/";
-    if (!imageUrl.pathname.includes(uploadPath)) return url;
+    if (!imageUrl.pathname.includes(uploadPath)) return null;
 
     imageUrl.pathname = imageUrl.pathname.replace(
       uploadPath,
@@ -94,8 +94,21 @@ export function optimizedImageUrl(url, width) {
     );
     return imageUrl.toString();
   } catch {
-    return url;
+    return null;
   }
+}
+
+export function optimizedImageUrl(url, width) {
+  return cloudinaryUrl(url, width) || url;
+}
+
+export function optimizedImageSrcSet(url, widths) {
+  if (!url || !Array.isArray(widths)) return undefined;
+  const entries = widths.map((width) => {
+    const optimized = cloudinaryUrl(url, width);
+    return optimized ? `${optimized} ${width}w` : null;
+  }).filter(Boolean);
+  return entries.length ? entries.join(", ") : undefined;
 }
 
 export async function uploadToCloudinary(file) {

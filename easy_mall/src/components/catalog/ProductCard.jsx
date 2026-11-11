@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Heart, ImageOff, MapPin } from "lucide-react";
 import { cx } from "../../styles/theme";
 import { formatPrice } from "../../lib/format";
-import { optimizedImageUrl } from "../../lib/cloudinary";
+import { optimizedImageSrcSet, optimizedImageUrl } from "../../lib/cloudinary";
 
 const PLACEHOLDER_GRADIENTS = [
   "from-indigo-400 to-violet-600",
@@ -19,7 +19,15 @@ export function ProductCard({ product, index = 0, t, onToggleFavorite, showSelle
       <div className="relative aspect-square">
         <Link to={`/produit/${product.id}`} className="block h-full w-full">
           {product.primary_image ? (
-            <img src={optimizedImageUrl(product.primary_image, 480)} alt={product.title} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+            <img
+              src={optimizedImageUrl(product.primary_image, 480)}
+              srcSet={optimizedImageSrcSet(product.primary_image, [320, 480, 640, 960])}
+              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+              alt={product.title}
+              loading="lazy"
+              decoding="async"
+              className="h-full w-full object-cover"
+            />
           ) : (
             <div className={cx("flex h-full w-full items-center justify-center bg-gradient-to-br", gradient)}>
               <ImageOff className="h-8 w-8 text-white/80" strokeWidth={1.5} />
@@ -73,6 +81,8 @@ export function ProductCard({ product, index = 0, t, onToggleFavorite, showSelle
           {product.seller_avatar_url ? (
             <img
               src={optimizedImageUrl(product.seller_avatar_url, 96)}
+              srcSet={optimizedImageSrcSet(product.seller_avatar_url, [48, 96, 144])}
+              sizes="28px"
               alt={`Photo de ${product.seller_username}`}
               loading="lazy"
               decoding="async"

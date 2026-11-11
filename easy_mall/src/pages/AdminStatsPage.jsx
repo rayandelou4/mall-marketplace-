@@ -77,6 +77,7 @@ export default function AdminStatsPage() {
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               <StatCard icon={Users} label="Utilisateurs" value={data.users.total} t={t} />
               <StatCard icon={Users} label="Nouveaux (30j)" value={data.users.new_last_30_days} t={t} />
+              <StatCard icon={Store} label="Vendeurs actifs" value={data.sellers.total} t={t} />
               <StatCard icon={Store} label="Vendeurs particuliers" value={data.sellers.individual} t={t} />
               <StatCard icon={Store} label="Commerçants professionnels" value={data.sellers.professional} t={t} />
               <StatCard icon={Package} label="Annonces publiées" value={data.products.published} t={t} />
@@ -128,6 +129,24 @@ export default function AdminStatsPage() {
                 rows={data.top_categories.map((c) => [c.category__name || "Sans catégorie", c.count])}
               />
             </div>
+
+            <section className="mt-10" aria-labelledby="admin-tools-title">
+              <h2 id="admin-tools-title" className={cx("mb-4 text-lg font-semibold", t.textPrimary)}>Gestion de la plateforme</h2>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {[
+                  ["Comptes utilisateurs", "/admin/accounts/user/"],
+                  ["Annonces", "/admin/catalog/product/"],
+                  ["Catégories", "/admin/catalog/category/"],
+                  ["Signalements", "/admin/moderation/productreport/"],
+                  ["Litiges", "/admin/moderation/dispute/"],
+                  ["Règles commerciales et fidélité", "/admin/promotions/loyaltyprogram/"],
+                ].map(([label, href]) => (
+                  <a key={href} href={href} className={cx("flex min-h-12 items-center justify-between border-b px-1 py-3 text-sm font-medium hover:text-indigo-600", t.border, t.textPrimary)}>
+                    {label}<span aria-hidden="true">↗</span>
+                  </a>
+                ))}
+              </div>
+            </section>
           </>
         )}
       </div>

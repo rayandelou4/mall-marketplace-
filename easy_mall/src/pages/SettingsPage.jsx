@@ -243,23 +243,19 @@ export default function SettingsPage() {
               </button>
             ))}
           </div>
-          {form.seller_type === "professional" && (
-            <>
-              <TextField label="Nom de la boutique" value={form.shop_name} onChange={update("shop_name")} t={t} />
-              <label className="block">
-                <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Description de la boutique</span>
-                <textarea value={form.shop_description} onChange={(e) => update("shop_description")(e.target.value)} rows={3} className={inputClass} />
-              </label>
-              {[["shop_logo_url", "Logo de la boutique", "logo"], ["shop_cover_url", "Bannière de la boutique", "cover"]].map(([field, label, key]) => (
-                <label key={field} className="block">
-                  <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>{label}</span>
-                  <input type="file" accept="image/*" onChange={(event) => handleShopImageChange(field, event.target.files?.[0])} className={cx("w-full rounded-xl border px-3 py-2 text-sm", t.border, t.inputBg, t.textPrimary)} />
-                  {uploadingShopImage[key] && <span className={cx("mt-1 block text-xs", t.textMuted)}>Téléchargement…</span>}
-                  {form[field] && <img src={form[field]} alt={`Aperçu : ${label}`} className={cx("mt-2 w-full object-cover", key === "logo" ? "h-20 w-20 rounded-full" : "h-28 rounded-lg")} />}
-                </label>
-              ))}
-            </>
-          )}
+          <TextField label="Nom commercial de la boutique" value={form.shop_name} onChange={update("shop_name")} t={t} />
+          <label className="block">
+            <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Description de la boutique</span>
+            <textarea value={form.shop_description} onChange={(e) => update("shop_description")(e.target.value)} rows={3} className={inputClass} />
+          </label>
+          {[["shop_logo_url", "Logo de la boutique", "logo"], ["shop_cover_url", "Bannière de la boutique", "cover"]].map(([field, label, key]) => (
+            <label key={field} className="block">
+              <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>{label}</span>
+              <input type="file" accept="image/*" onChange={(event) => handleShopImageChange(field, event.target.files?.[0])} className={cx("w-full rounded-xl border px-3 py-2 text-sm", t.border, t.inputBg, t.textPrimary)} />
+              {uploadingShopImage[key] && <span className={cx("mt-1 block text-xs", t.textMuted)}>Téléchargement…</span>}
+              {form[field] && <img src={form[field]} alt={`Aperçu : ${label}`} className={cx("mt-2 w-full object-cover", key === "logo" ? "h-20 w-20 rounded-full" : "h-28 rounded-lg")} />}
+            </label>
+          ))}
           <label className={cx("flex items-start gap-3 rounded-xl border p-4 text-sm", t.border, t.cardBg)}>
             <input
               type="checkbox"

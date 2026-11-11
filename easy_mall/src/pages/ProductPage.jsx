@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { Heart, MapPin, MessageCircle, ShoppingCart, Star, ImageOff } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
@@ -14,8 +14,9 @@ import { createReport } from "../features/moderation/api";
 import { ModerationMessageForm } from "../components/ui/ModerationMessageForm";
 import { PRODUCT_REPORT_REASONS } from "../features/moderation/formOptions";
 import { formatPrice } from "../lib/format";
-import { optimizedImageUrl } from "../lib/cloudinary";
+import { optimizedImageSrcSet, optimizedImageUrl } from "../lib/cloudinary";
 import { createWhatsAppUrl } from "../lib/whatsapp";
+import { createNegotiation } from "../features/negotiations/api";
 import { cx } from "../styles/theme";
 
 function loadComparisonPage(productId, page, setComparisonState) {
@@ -35,24 +36,37 @@ export default function ProductPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t } = useTheme();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { addItem } = useCart();
 
   const [state, setState] = useState({ loading: true, error: null, product: null });
   const [comparisonState, setComparisonState] = useState({ loading: false, error: null, exact: null, similar: [] });
   const [reviews, setReviews] = useState([]);
+  const [reviewsLoading, setReviewsLoading] = useState(false);
+  const reviewsSectionRef = useRef(null);
+  const comparisonsSectionRef = useRef(null);
+  const reviewsRequestedRef = useRef(false);
+  const comparisonsRequestedRef = useRef(false);
   const [activeImage, setActiveImage] = useState(0);
   const [selectedVariantId, setSelectedVariantId] = useState("");
   const [actionNotice, setActionNotice] = useState(null);
   const [contactOptionsOpen, setContactOptionsOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSending, setReportSending] = useState(false);
+  const [offerOpen, setOfferOpen] = useState(false);
+  const [offerAmount, setOfferAmount] = useState("");
+  const [offerSaving, setOfferSaving] = useState(false);
+  const [offerError, setOfferError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     setState({ loading: true, error: null, product: null });
     setActiveImage(0);
     setSelectedVariantId("");
+    setReviews([]);
+    setReviewsLoading(false);
+    reviewsRequestedRef.current = false;
+    comparisonsRequestedRef.current = false;
     setComparisonState({ loading: false, error: null, exact: null, similar: [] });
 
     fetchProduct(id)
@@ -60,14 +74,6 @@ export default function ProductPage() {
         if (cancelled) return;
         setState({ loading: false, error: null, product });
         trackProductActivity(product.id, "view", getActivityVisitorId()).catch(() => {});
-        fetchReviews({ user: product.seller_username })
-          .then((items) => !cancelled && setReviews(items))
-          .catch(() => {});
-        if (product.item_type !== "service") {
-          loadComparisonPage(id, 1, (nextState) => {
-            if (!cancelled) setComparisonState(nextState);
-          });
-        }
       })
       .catch((err) => {
         if (!cancelled) setState({ loading: false, error: err.message, product: null });
@@ -77,6 +83,53 @@ export default function ProductPage() {
       cancelled = true;
     };
   }, [id]);
+
+  useEffect(() => {
+    const product = state.product;
+    if (!product) return undefined;
+    let active = true;
+
+    function loadReviews() {
+      if (reviewsRequestedRef.current) return;
+      reviewsRequestedRef.current = true;
+      setReviewsLoading(true);
+      fetchReviews({ user: product.seller_username })
+        .then((items) => { if (active) setReviews(items); })
+        .catch(() => {})
+        .finally(() => { if (active) setReviewsLoading(false); });
+    }
+
+    function loadComparisons() {
+      if (comparisonsRequestedRef.current || product.item_type === "service") return;
+      comparisonsRequestedRef.current = true;
+      loadComparisonPage(id, 1, (nextState) => {
+        if (active) setComparisonState(nextState);
+      });
+    }
+
+    if (!("IntersectionObserver" in window)) {
+      loadReviews();
+      loadComparisons();
+      return () => { active = false; };
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        if (entry.target === reviewsSectionRef.current) loadReviews();
+        if (entry.target === comparisonsSectionRef.current) loadComparisons();
+      }
+    }, { rootMargin: "240px 0px" });
+    if (reviewsSectionRef.current) observer.observe(reviewsSectionRef.current);
+    if (product.item_type !== "service" && comparisonsSectionRef.current) {
+      observer.observe(comparisonsSectionRef.current);
+    }
+
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
+  }, [id, state.product]);
 
   async function handleFavorite() {
     if (!isAuthenticated) return navigate("/auth");
@@ -119,6 +172,26 @@ export default function ProductPage() {
     navigate("/messages", {
       state: { startWith: { username: product.seller_username, productId: product.id, productTitle: product.title, phoneNumber: product.seller_phone_number } },
     });
+  }
+
+  async function handleSubmitOffer(event) {
+    event.preventDefault();
+    if (!isAuthenticated) return navigate("/auth");
+    const variant = product.variants?.find((item) => item.id === selectedVariantId) || null;
+    if (product.variants?.length && !variant) {
+      setOfferError("Choisissez une variante avant de faire une proposition.");
+      return;
+    }
+    setOfferSaving(true);
+    setOfferError(null);
+    try {
+      await createNegotiation({ productId: product.id, variantId: variant?.id, amount: offerAmount });
+      navigate("/negociations", { state: { notice: "Votre proposition a été envoyée au vendeur." } });
+    } catch (error) {
+      setOfferError(error.message);
+    } finally {
+      setOfferSaving(false);
+    }
   }
 
   function handleWhatsAppContact() {
@@ -237,7 +310,15 @@ export default function ProductPage() {
               <div>
                 <div className={cx("aspect-square overflow-hidden rounded-2xl border", t.cardBorder)}>
                   {product.images?.length ? (
-                    <img src={optimizedImageUrl(product.images[activeImage]?.image_url, 1400)} alt={product.title} decoding="async" className="h-full w-full object-cover" />
+                    <img
+                      src={optimizedImageUrl(product.images[activeImage]?.image_url, 1400)}
+                      srcSet={optimizedImageSrcSet(product.images[activeImage]?.image_url, [480, 640, 960, 1280, 1600])}
+                      sizes="(min-width: 1024px) 50vw, 100vw"
+                      alt={product.title}
+                      fetchPriority="high"
+                      decoding="async"
+                      className="h-full w-full object-cover"
+                    />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center bg-linear-to-br from-indigo-400 to-violet-600">
                       <ImageOff className="h-10 w-10 text-white/80" strokeWidth={1.5} />
@@ -336,6 +417,41 @@ export default function ProductPage() {
                   </button>
                 </div>
 
+                {product.item_type === "product" && canBuy && user?.username !== product.seller_username && (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!isAuthenticated) return navigate("/auth");
+                        setOfferAmount(String(product.price));
+                        setOfferOpen((open) => !open);
+                        setOfferError(null);
+                      }}
+                      className={cx("min-h-11 rounded-full border px-5 py-2.5 text-sm font-semibold", t.border, t.textPrimary)}
+                    >
+                      Proposer un prix
+                    </button>
+                    {offerOpen && (
+                      <form onSubmit={handleSubmitOffer} className={cx("mt-3 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-end", t.border, t.cardBg)}>
+                        <TextField
+                          label={`Votre proposition (${product.currency})`}
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={offerAmount}
+                          onChange={setOfferAmount}
+                          required
+                          t={t}
+                        />
+                        <button type="submit" disabled={offerSaving || !offerAmount} className="min-h-11 rounded-full bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
+                          {offerSaving ? "Envoi…" : "Envoyer la proposition"}
+                        </button>
+                        {offerError && <p className="text-sm text-rose-600" role="alert">{offerError}</p>}
+                      </form>
+                    )}
+                  </div>
+                )}
+
                 {reportOpen && (
                   <ModerationMessageForm
                     t={t}
@@ -386,6 +502,8 @@ export default function ProductPage() {
               </div>
             </div>
 
+            <div ref={reviewsSectionRef} className="min-h-px" />
+            {reviewsLoading && <p className={cx("mt-3 text-sm", t.textMuted)}>Chargement des avis…</p>}
             {reviews.length > 0 && (
               <div className="mt-14">
                 <SectionHeading title={`Avis sur ce vendeur (${reviews.length})`} t={t} />
@@ -408,7 +526,7 @@ export default function ProductPage() {
             )}
 
             {product.item_type === "product" && (
-              <div className="mt-14">
+              <div ref={comparisonsSectionRef} className="mt-14">
                 <SectionHeading
                   title="Comparateur de prix"
                   subtitle="Les offres exactes reposent sur une référence produit validée. Les prix sont comparés uniquement dans la même devise."
@@ -448,6 +566,12 @@ export default function ProductPage() {
                               <p className={cx("truncate text-sm font-medium", t.textPrimary)}>{offer.title}</p>
                               <p className={cx("text-xs", t.textMuted)}>
                                 {offer.condition_display || "État non précisé"} · {offer.seller_username}{offer.city ? ` · ${offer.city}` : ""}
+                              </p>
+                              <p className={cx("flex items-center gap-1 text-xs", t.textMuted)}>
+                                <span>{offer.is_available ? "Disponible" : "Indisponible"}</span>
+                                <span aria-hidden="true">·</span>
+                                <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                                <span>{Number(offer.seller_rating || 0).toFixed(1)} / 5</span>
                               </p>
                               <p className={cx("text-xs", t.textMuted)}>
                                 {offer.shipping_cost_known ? `Livraison : ${formatPrice(offer.shipping_cost, offer.currency)}` : "Frais de livraison à confirmer"}

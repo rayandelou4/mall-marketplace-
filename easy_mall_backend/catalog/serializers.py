@@ -581,10 +581,13 @@ class StockMovementSerializer(serializers.ModelSerializer):
 
 class FavoriteSerializer(serializers.ModelSerializer):
     product_detail = ProductListSerializer(source="product", read_only=True)
+    target_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, allow_null=True, required=False, min_value=0
+    )
 
     class Meta:
         model = Favorite
-        fields = ["id", "product", "product_detail", "created_at"]
+        fields = ["id", "product", "product_detail", "target_price", "created_at"]
         extra_kwargs = {"product": {"write_only": True}}
 
     def validate_product(self, value):

@@ -3,6 +3,10 @@ export const API_BASE_URL = (
 ).replace(/\/+$/, "");
 
 const REFRESH_STORAGE_KEY = "mall_refresh_token";
+const GET_CACHE_TTL_MS = 30_000;
+const GET_CACHE_MAX_ENTRIES = 100;
+const getResponseCache = new Map();
+const inFlightGets = new Map();
 
 // L'access token ne vit qu'en mémoire (jamais persisté) ; seul le refresh
 // token est stocké, pour pouvoir restaurer la session après un rechargement.
@@ -15,6 +19,7 @@ let refreshToken = typeof window !== "undefined" ? localStorage.getItem(REFRESH_
 export function setTokens({ access, refresh } = {}) {
   if (access !== undefined) accessToken = access;
   if (refresh !== undefined) {
+    if (refreshToken !== refresh) clearReadCache();
     refreshToken = refresh;
     if (typeof window !== "undefined") {
       if (refresh) localStorage.setItem(REFRESH_STORAGE_KEY, refresh);
@@ -25,6 +30,12 @@ export function setTokens({ access, refresh } = {}) {
 
 export function clearTokens() {
   setTokens({ access: null, refresh: null });
+  clearReadCache();
+}
+
+function clearReadCache() {
+  getResponseCache.clear();
+  inFlightGets.clear();
 }
 
 export function getRefreshToken() {
@@ -88,7 +99,7 @@ function refreshAccessToken() {
   return refreshing;
 }
 
-export async function apiRequest(path, options = {}) {
+async function requestAndParse(path, options) {
   let response = await rawFetch(path, options);
 
   if (response.status === 401 && refreshToken) {
@@ -101,6 +112,41 @@ export async function apiRequest(path, options = {}) {
   }
 
   return parseOrThrow(response);
+}
+
+function cloneData(data) {
+  return data == null ? data : JSON.parse(JSON.stringify(data));
+}
+
+export async function apiRequest(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  if (method !== "GET") {
+    clearReadCache();
+    return requestAndParse(path, options);
+  }
+
+  const isCatalogRead = path.startsWith("/catalog/categories/")
+    || path.startsWith("/catalog/products/");
+  if (!isCatalogRead) return requestAndParse(path, options);
+
+  const cacheKey = `${refreshToken || "guest"}:${path}`;
+  const cached = getResponseCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cloneData(cached.data);
+  if (cached) getResponseCache.delete(cacheKey);
+
+  if (inFlightGets.has(cacheKey)) return cloneData(await inFlightGets.get(cacheKey));
+
+  const request = requestAndParse(path, options)
+    .then((data) => {
+      getResponseCache.set(cacheKey, { data, expiresAt: Date.now() + GET_CACHE_TTL_MS });
+      if (getResponseCache.size > GET_CACHE_MAX_ENTRIES) {
+        getResponseCache.delete(getResponseCache.keys().next().value);
+      }
+      return data;
+    })
+    .finally(() => inFlightGets.delete(cacheKey));
+  inFlightGets.set(cacheKey, request);
+  return cloneData(await request);
 }
 
 export async function apiDownload(path) {

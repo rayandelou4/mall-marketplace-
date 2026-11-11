@@ -6,7 +6,14 @@ import { SiteFooter } from "../components/layout/SiteFooter";
 import { SectionHeading, LoadingBlock, ErrorBlock } from "../components/ui/StatusBlocks";
 import { useTheme } from "../features/theme/ThemeContext";
 import { useAuth } from "../features/auth/AuthContext";
-import { deleteNotification, fetchNotifications, markAllRead, markRead } from "../features/notifications/api";
+import {
+  deleteNotification,
+  fetchNotificationPreferences,
+  fetchNotifications,
+  markAllRead,
+  markRead,
+  updateNotificationPreferences,
+} from "../features/notifications/api";
 import { cx } from "../styles/theme";
 
 const TYPE_LABELS = {
@@ -17,6 +24,8 @@ const TYPE_LABELS = {
   delivery: "Livraison",
   new_favorite: "Favori",
   promotion: "Promotion",
+  price_drop: "Baisse de prix",
+  saved_search_match: "Recherche enregistrée",
 };
 
 function formatDate(value) {
@@ -28,6 +37,8 @@ export default function NotificationsPage() {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [state, setState] = useState({ loading: true, error: null, items: [] });
+  const [preferences, setPreferences] = useState(null);
+  const [savingPreference, setSavingPreference] = useState(null);
 
   function load() {
     setState((s) => ({ ...s, loading: true }));
@@ -42,8 +53,21 @@ export default function NotificationsPage() {
       return;
     }
     load();
+    fetchNotificationPreferences().then(setPreferences).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
+
+  async function handlePreferenceChange(field, value) {
+    setSavingPreference(field);
+    try {
+      const updated = await updateNotificationPreferences({ [field]: value });
+      setPreferences(updated);
+    } catch (error) {
+      window.alert(error.message);
+    } finally {
+      setSavingPreference(null);
+    }
+  }
 
   async function handleOpen(notification) {
     if (!notification.is_read) {
@@ -98,6 +122,36 @@ export default function NotificationsPage() {
             </button>
           )}
         </div>
+
+        {preferences && (
+          <section className={cx("mb-8 border-y py-4", t.border)} aria-labelledby="notification-preferences-title">
+            <h2 id="notification-preferences-title" className={cx("mb-3 text-sm font-semibold", t.textPrimary)}>Préférences d’alertes</h2>
+            <div className="flex flex-col gap-3 sm:flex-row sm:gap-8">
+              {[
+                ["price_drop_alerts", "Baisses de prix", "Alerter quand un favori passe sous mon prix cible."],
+                ["saved_search_alerts", "Nouvelles annonces", "Alerter quand une annonce correspond à une recherche enregistrée."],
+              ].map(([field, label, description]) => (
+                <div key={field} className="flex flex-1 items-center justify-between gap-3">
+                  <span>
+                    <span className={cx("block text-sm font-medium", t.textPrimary)}>{label}</span>
+                    <span className={cx("block text-xs", t.textMuted)}>{description}</span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label={label}
+                    aria-checked={preferences[field]}
+                    disabled={savingPreference === field}
+                    onClick={() => handlePreferenceChange(field, !preferences[field])}
+                    className={cx("relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-60", preferences[field] ? "bg-emerald-600" : "bg-zinc-300")}
+                  >
+                    <span className={cx("absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform", preferences[field] ? "translate-x-5" : "translate-x-0.5")} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {loading ? (
           <LoadingBlock t={t} />

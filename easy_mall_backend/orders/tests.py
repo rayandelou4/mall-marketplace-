@@ -76,6 +76,46 @@ class OrderCheckoutTests(TestCase):
         )
         self.assertEqual(movement.quantity_delta, -2)
 
+    def test_single_item_cannot_be_sold_twice_and_cancellation_restores_it(self):
+        self.product.stock_quantity = 1
+        self.product.save(update_fields=["stock_quantity"])
+
+        order = self.create_order([{"product_id": str(self.product.pk), "quantity": 1}])
+
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock_quantity, 0)
+        self.assertEqual(self.product.status, Product.Status.SOLD)
+        self.assertFalse(self.product.is_available)
+
+        second_order = OrderCreateSerializer(
+            data={"shipping_address": "Adresse test", "items": [{
+                "product_id": str(self.product.pk), "quantity": 1,
+            }]},
+            context={"request": self.request},
+        )
+        self.assertFalse(second_order.is_valid())
+        self.assertIn("n'est plus disponible", str(second_order.errors))
+
+        cancel_serializer = OrderCancelSerializer(data={}, context={"order": order})
+        self.assertTrue(cancel_serializer.is_valid(), cancel_serializer.errors)
+        cancel_serializer.save()
+
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock_quantity, 1)
+        self.assertEqual(self.product.status, Product.Status.PUBLISHED)
+        self.assertTrue(self.product.is_available)
+        self.assertEqual(
+            list(
+                StockMovement.objects.filter(product=self.product)
+                .order_by("created_at")
+                .values_list("movement_type", "quantity_delta")
+            ),
+            [
+                (StockMovement.MovementType.SALE, -1),
+                (StockMovement.MovementType.CANCELLATION, 1),
+            ],
+        )
+
     def test_variant_checkout_tracks_attribution_and_restores_variant_stock(self):
         self.product.stock_quantity = 5
         self.product.save(update_fields=["stock_quantity"])

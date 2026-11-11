@@ -12,11 +12,14 @@ function getNavLinks(isAuthenticated, isStaff) {
   const links = [
     { label: "Produits", to: "/catalogue?item_type=product" },
     { label: "Services", to: "/catalogue?item_type=service" },
+    { label: "Assistant d’achat", to: "/assistant-achat" },
     { label: "Vendre", to: isAuthenticated ? "/vendeur" : "/auth?mode=register" },
   ];
   if (isAuthenticated) {
     links.push(
       { label: "Mes commandes", to: "/mes-commandes" },
+      { label: "Litiges", to: "/litiges" },
+      { label: "Négociations", to: "/negociations" },
       { label: "Favoris", to: "/favoris" },
       { label: "Messages", to: "/messages" },
     );

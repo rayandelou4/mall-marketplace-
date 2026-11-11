@@ -28,7 +28,11 @@ class ProductAdmin(admin.ModelAdmin):
 
     @admin.action(description="Approuver les annonces sélectionnées")
     def approve_products(self, request, queryset):
-        updated = queryset.update(moderation_status=Product.ModerationStatus.APPROVED)
+        updated = 0
+        for product in queryset.iterator():
+            product.moderation_status = Product.ModerationStatus.APPROVED
+            product.save(update_fields=["moderation_status"])
+            updated += 1
         self.message_user(
             request,
             ngettext("%d annonce approuvée.", "%d annonces approuvées.", updated) % updated,
@@ -36,7 +40,11 @@ class ProductAdmin(admin.ModelAdmin):
 
     @admin.action(description="Rejeter les annonces sélectionnées")
     def reject_products(self, request, queryset):
-        updated = queryset.update(moderation_status=Product.ModerationStatus.REJECTED)
+        updated = 0
+        for product in queryset.iterator():
+            product.moderation_status = Product.ModerationStatus.REJECTED
+            product.save(update_fields=["moderation_status"])
+            updated += 1
         self.message_user(
             request,
             ngettext("%d annonce rejetée.", "%d annonces rejetées.", updated) % updated,

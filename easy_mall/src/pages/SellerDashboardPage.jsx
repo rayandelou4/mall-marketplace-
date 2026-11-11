@@ -13,6 +13,7 @@ import { cx } from "../styles/theme";
 import { fetchSellerStats } from "../features/analytics/api";
 import { VerificationPanel } from "../components/seller/VerificationPanel";
 import { SellerLocalizationPanel } from "../components/seller/SellerLocalizationPanel";
+import { SellerPromotionsPanel } from "../components/seller/SellerPromotionsPanel";
 
 const STATUS_LABELS = { draft: "Brouillon", published: "Publié", sold: "Vendu", archived: "Archivé" };
 const MODERATION_LABELS = { pending: "En attente de validation", approved: "Visible", rejected: "Refusée" };
@@ -44,7 +45,7 @@ export default function SellerDashboardPage() {
 
   useEffect(() => {
     const section = searchParams.get("section");
-    setActiveSection(["sales", "verification", "localization"].includes(section) ? section : "products");
+    setActiveSection(["sales", "verification", "localization", "promotions"].includes(section) ? section : "products");
   }, [searchParams]);
 
   function loadProducts() {
@@ -176,6 +177,9 @@ export default function SellerDashboardPage() {
   const revenueSummary = analytics.data?.sales.revenue_by_currency
     .map(({ currency, amount }) => formatPrice(amount, currency))
     .join(" · ") || "—";
+  const periodRevenueSummary = analytics.data?.period_sales?.revenue_by_currency
+    .map(({ currency, amount }) => formatPrice(amount, currency))
+    .join(" · ") || "—";
 
   return (
     <div className={cx("min-h-screen transition-colors duration-300", t.pageBg, t.textPrimary)}>
@@ -197,9 +201,9 @@ export default function SellerDashboardPage() {
         <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           <StatCard icon={Package} label="Annonces" value={analytics.data?.products.total ?? "—"} t={t} />
           <StatCard icon={TrendingUp} label="Publiées" value={analytics.data?.products.published ?? "—"} t={t} />
-          <StatCard icon={ShoppingBag} label="Produits vendus" value={analytics.data?.sales.products_sold ?? "—"} t={t} />
-          <StatCard icon={Package} label="Unités vendues" value={analytics.data?.sales.units ?? "—"} t={t} />
-          <StatCard icon={ShoppingBag} label="Commandes reçues" value={analytics.data?.sales.orders_received ?? "—"} t={t} />
+          <StatCard icon={ShoppingBag} label="Produits vendus · période" value={analytics.data?.period_sales?.products_sold ?? "—"} t={t} />
+          <StatCard icon={Package} label="Unités vendues · période" value={analytics.data?.period_sales?.units ?? "—"} t={t} />
+          <StatCard icon={ShoppingBag} label="Commandes reçues · période" value={analytics.data?.period_sales?.orders_received ?? "—"} t={t} />
           <StatCard icon={ShoppingBag} label="Commandes en cours" value={analytics.data?.sales.orders_pending ?? "—"} t={t} />
           <StatCard icon={Eye} label="Vues cumulées" value={analytics.data?.products.views ?? "—"} t={t} />
           <StatCard icon={Heart} label="Ajouts aux favoris" value={analytics.data?.products.favorites ?? "—"} t={t} />
@@ -269,7 +273,11 @@ export default function SellerDashboardPage() {
               ))}
             </div>
           )}
-          <p className={cx("mt-4 text-sm", t.textMuted)}>Chiffre d’affaires confirmé : <span className={cx("font-semibold", t.textPrimary)}>{revenueSummary}</span></p>
+          <p className={cx("mt-4 text-sm", t.textMuted)}>
+            Chiffre d’affaires confirmé sur la période : <span className={cx("font-semibold", t.textPrimary)}>{periodRevenueSummary}</span>
+            <span className="mx-2">·</span>
+            Cumulé : <span className={cx("font-semibold", t.textPrimary)}>{revenueSummary}</span>
+          </p>
           {analytics.data?.transactions.pending_by_currency?.length > 0 && (
             <p className={cx("mt-2 text-sm", t.textMuted)}>
               Paiements retenus : <span className={cx("font-semibold", t.textPrimary)}>
@@ -352,9 +360,20 @@ export default function SellerDashboardPage() {
           >
             Localisation & livraison
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeSection === "promotions"}
+            onClick={() => setActiveSection("promotions")}
+            className={cx("flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors", activeSection === "promotions" ? "bg-indigo-600 text-white" : t.textMuted)}
+          >
+            Promotions
+          </button>
         </div>
 
-        {activeSection === "localization" ? (
+        {activeSection === "promotions" ? (
+          <SellerPromotionsPanel t={t} />
+        ) : activeSection === "localization" ? (
           <SellerLocalizationPanel t={t} />
         ) : activeSection === "verification" ? (
           <VerificationPanel t={t} isProfessional={user?.seller_type === "professional"} />

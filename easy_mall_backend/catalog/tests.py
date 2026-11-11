@@ -3,7 +3,9 @@ from django.urls import reverse
 from rest_framework.test import APITestCase
 from rest_framework.exceptions import ValidationError
 
-from .models import Category, Product, ProductActivity, ProductIdentity, SellerFavorite, StockMovement
+from notifications.models import Notification, NotificationPreference
+
+from .models import Category, Favorite, Product, ProductActivity, ProductIdentity, SavedSearch, SellerFavorite, StockMovement
 from .serializers import ProductCreateUpdateSerializer
 
 
@@ -346,6 +348,8 @@ class ProductComparisonTests(APITestCase):
             {offer["id"] for offer in exact["results"]},
             {str(reference.pk), str(cheapest.pk)},
         )
+        self.assertTrue(all(offer["is_available"] for offer in exact["results"]))
+        self.assertTrue(all("seller_rating" in offer for offer in exact["results"]))
         self.assertFalse(exact["results"][0]["shipping_cost_known"])
 
     def test_similar_titles_are_not_reported_as_exact_matches(self):
@@ -559,3 +563,135 @@ class ProductActivityTests(APITestCase):
         product.refresh_from_db()
         self.assertEqual(product.views_count, 1)
         self.assertEqual(ProductActivity.objects.filter(product=product).count(), 1)
+
+
+class ProductAlertTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.seller = User.objects.create_user(
+            email="alert-seller@mall.test",
+            phone_number="+243900000101",
+            username="alert-seller",
+            password="Seller123!",
+        )
+        self.buyer = User.objects.create_user(
+            email="alert-buyer@mall.test",
+            phone_number="+243900000102",
+            username="alert-buyer",
+            password="Buyer123!",
+        )
+        self.category = Category.objects.create(name="Alertes")
+
+    def create_product(self, title="Téléphone Pixel", price="100.00"):
+        return Product.objects.create(
+            seller=self.seller,
+            category=self.category,
+            title=title,
+            description="Annonce publique",
+            price=price,
+            currency="USD",
+            city="Kinshasa",
+            country="RDC",
+            stock_quantity=1,
+            status=Product.Status.PUBLISHED,
+            moderation_status=Product.ModerationStatus.APPROVED,
+        )
+
+    def test_price_alert_fires_on_target_crossing_and_rearms_after_price_rises(self):
+        product = self.create_product()
+        Favorite.objects.create(user=self.buyer, product=product, target_price="90.00")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            product.price = "89.00"
+            product.save(update_fields=["price"])
+
+        self.assertEqual(
+            Notification.objects.filter(
+                user=self.buyer,
+                notification_type=Notification.NotificationType.PRICE_DROP,
+            ).count(),
+            1,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            product.price = "95.00"
+            product.save(update_fields=["price"])
+        with self.captureOnCommitCallbacks(execute=True):
+            product.price = "85.00"
+            product.save(update_fields=["price"])
+
+        self.assertEqual(
+            Notification.objects.filter(
+                user=self.buyer,
+                notification_type=Notification.NotificationType.PRICE_DROP,
+            ).count(),
+            2,
+        )
+
+    def test_saved_search_notification_only_fires_for_a_matching_public_listing(self):
+        SavedSearch.objects.create(
+            user=self.buyer,
+            name="Pixel USD",
+            query_params={
+                "search": "Pixel",
+                "category": str(self.category.pk),
+                "currency": "USD",
+            },
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_product(title="Samsung Galaxy")
+        self.assertFalse(
+            Notification.objects.filter(
+                user=self.buyer,
+                notification_type=Notification.NotificationType.SAVED_SEARCH_MATCH,
+            ).exists()
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            product = self.create_product(title="Google Pixel")
+        notification = Notification.objects.get(
+            user=self.buyer,
+            notification_type=Notification.NotificationType.SAVED_SEARCH_MATCH,
+        )
+        self.assertEqual(notification.link_path, f"/produit/{product.pk}")
+
+    def test_disabled_saved_search_preference_suppresses_notification(self):
+        SavedSearch.objects.create(
+            user=self.buyer,
+            name="Pixel",
+            query_params={"search": "Pixel"},
+        )
+        NotificationPreference.objects.create(
+            user=self.buyer,
+            saved_search_alerts=False,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_product(title="Google Pixel")
+
+        self.assertFalse(
+            Notification.objects.filter(
+                user=self.buyer,
+                notification_type=Notification.NotificationType.SAVED_SEARCH_MATCH,
+            ).exists()
+        )
+
+    def test_disabled_price_alert_preference_suppresses_notification(self):
+        product = self.create_product()
+        Favorite.objects.create(user=self.buyer, product=product, target_price="90.00")
+        NotificationPreference.objects.create(
+            user=self.buyer,
+            price_drop_alerts=False,
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            product.price = "80.00"
+            product.save(update_fields=["price"])
+
+        self.assertFalse(
+            Notification.objects.filter(
+                user=self.buyer,
+                notification_type=Notification.NotificationType.PRICE_DROP,
+            ).exists()
+        )

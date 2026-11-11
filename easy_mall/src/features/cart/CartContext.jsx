@@ -17,8 +17,10 @@ function getStockLimit(product, variant = null) {
   return Number.isFinite(stock) ? Math.max(0, Math.floor(stock)) : Infinity;
 }
 
-function isSameEntry(item, productId, variantId) {
-  return item.product.id === productId && (item.variant?.id || null) === (variantId || null);
+function isSameEntry(item, productId, variantId, negotiationId = null) {
+  return item.product.id === productId
+    && (item.variant?.id || null) === (variantId || null)
+    && (item.negotiation?.id || null) === (negotiationId || null);
 }
 
 export function CartProvider({ children }) {
@@ -30,27 +32,27 @@ export function CartProvider({ children }) {
     localStorage.setItem(storageKey, JSON.stringify(items));
   }, [items, storageKey]);
 
-  function addItem(product, quantity = 1, visitorId = null, variant = null) {
+  function addItem(product, quantity = 1, visitorId = null, variant = null, negotiation = null) {
     setItems((prev) => {
       const maxQty = getStockLimit(product, variant);
       const requestedQuantity = Math.max(1, Math.floor(Number(quantity) || 1));
       if (maxQty < 1) return prev;
-      const existing = prev.find((item) => isSameEntry(item, product.id, variant?.id));
+      const existing = prev.find((item) => isSameEntry(item, product.id, variant?.id, negotiation?.id));
       if (existing) {
         return prev.map((i) =>
-          isSameEntry(i, product.id, variant?.id) ? { ...i, product, variant, visitorId: visitorId || i.visitorId, quantity: Math.min(i.quantity + requestedQuantity, maxQty) } : i
+          isSameEntry(i, product.id, variant?.id, negotiation?.id) ? { ...i, product, variant, negotiation, visitorId: visitorId || i.visitorId, quantity: Math.min(i.quantity + requestedQuantity, maxQty) } : i
         );
       }
-      return [...prev, { product, variant, quantity: Math.min(requestedQuantity, maxQty), visitorId }];
+      return [...prev, { product, variant, negotiation, quantity: Math.min(requestedQuantity, maxQty), visitorId }];
     });
   }
 
-  function updateQuantity(productId, quantity, variantId = null) {
+  function updateQuantity(productId, quantity, variantId = null, negotiationId = null) {
     setItems((prev) =>
       quantity <= 0
-        ? prev.filter((item) => !isSameEntry(item, productId, variantId))
+        ? prev.filter((item) => !isSameEntry(item, productId, variantId, negotiationId))
         : prev.map((i) => {
-          if (!isSameEntry(i, productId, variantId)) return i;
+          if (!isSameEntry(i, productId, variantId, negotiationId)) return i;
           const requestedQuantity = Math.floor(Number(quantity));
           if (!Number.isFinite(requestedQuantity)) return i;
           return {
@@ -61,8 +63,8 @@ export function CartProvider({ children }) {
     );
   }
 
-  function removeItem(productId, variantId = null) {
-    setItems((prev) => prev.filter((item) => !isSameEntry(item, productId, variantId)));
+  function removeItem(productId, variantId = null, negotiationId = null) {
+    setItems((prev) => prev.filter((item) => !isSameEntry(item, productId, variantId, negotiationId)));
   }
 
   function clear() {
@@ -80,7 +82,7 @@ export function CartProvider({ children }) {
   const totalsByCurrency = items.reduce((totals, i) => {
     const key = i.product.currency;
     totals[key] = (totals[key] || 0)
-      + Number(i.product.price) * i.quantity
+      + Number(i.negotiation?.accepted_price ?? i.product.price) * i.quantity
       + (i.product.sale_method === "pickup" ? 0 : Number(i.product.shipping_cost || 0));
     return totals;
   }, {});

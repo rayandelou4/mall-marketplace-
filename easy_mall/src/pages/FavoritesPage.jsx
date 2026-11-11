@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Heart, Trash2 } from "lucide-react";
+import { Heart, Save, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
@@ -11,6 +11,7 @@ import {
   fetchSellerFavorites,
   removeFavorite,
   removeSellerFavorite,
+  updateFavorite,
 } from "../features/catalog/api";
 import { useTheme } from "../features/theme/ThemeContext";
 import { cx } from "../styles/theme";
@@ -20,6 +21,8 @@ export default function FavoritesPage() {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("listings");
+  const [targetDrafts, setTargetDrafts] = useState({});
+  const [savingTargetId, setSavingTargetId] = useState(null);
   const [state, setState] = useState({
     loading: true,
     error: null,
@@ -35,7 +38,10 @@ export default function FavoritesPage() {
     let cancelled = false;
     Promise.all([fetchFavorites(), fetchSellerFavorites()])
       .then(([listings, sellers]) => {
-        if (!cancelled) setState({ loading: false, error: null, listings, sellers });
+        if (!cancelled) {
+          setState({ loading: false, error: null, listings, sellers });
+          setTargetDrafts(Object.fromEntries(listings.map((item) => [item.id, item.target_price || ""])));
+        }
       })
       .catch((error) => {
         if (!cancelled) setState((current) => ({ ...current, loading: false, error: error.message }));
@@ -64,6 +70,25 @@ export default function FavoritesPage() {
       }));
     } catch (error) {
       window.alert(error.message);
+    }
+  }
+
+  async function handleSaveTarget(favorite) {
+    setSavingTargetId(favorite.id);
+    try {
+      const value = targetDrafts[favorite.id] ?? "";
+      const updated = await updateFavorite(favorite.id, {
+        target_price: value === "" ? null : value,
+      });
+      setState((current) => ({
+        ...current,
+        listings: current.listings.map((item) => item.id === favorite.id ? updated : item),
+      }));
+      setTargetDrafts((current) => ({ ...current, [favorite.id]: updated.target_price || "" }));
+    } catch (error) {
+      window.alert(error.message);
+    } finally {
+      setSavingTargetId(null);
     }
   }
 
@@ -110,6 +135,35 @@ export default function FavoritesPage() {
               {state.listings.map((favorite, index) => (
                 <div key={favorite.id}>
                   <ProductCard product={favorite.product_detail} index={index} t={t} showSeller />
+                  <div className={cx("mt-3 border-t pt-3", t.border)}>
+                    <label className={cx("block text-xs font-medium", t.textPrimary)} htmlFor={`target-price-${favorite.id}`}>
+                      M’alerter sous {favorite.product_detail.currency}
+                    </label>
+                    <div className="mt-1 flex gap-2">
+                      <input
+                        id={`target-price-${favorite.id}`}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={targetDrafts[favorite.id] ?? ""}
+                        onChange={(event) => setTargetDrafts((current) => ({ ...current, [favorite.id]: event.target.value }))}
+                        placeholder="Prix cible"
+                        className={cx("min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm", t.border, t.cardBg, t.textPrimary)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleSaveTarget(favorite)}
+                        disabled={savingTargetId === favorite.id}
+                        aria-label={`Enregistrer le prix cible pour ${favorite.product_detail.title}`}
+                        className={cx("min-h-11 min-w-11 rounded-lg border", t.border, t.textPrimary, "disabled:opacity-50")}
+                      >
+                        <Save className="mx-auto h-4 w-4" />
+                      </button>
+                    </div>
+                    {favorite.target_price != null && (
+                      <p className={cx("mt-1 text-xs", t.textMuted)}>Alerte activée sous {favorite.target_price} {favorite.product_detail.currency}</p>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={() => handleRemoveListing(favorite)}

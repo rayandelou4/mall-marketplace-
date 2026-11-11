@@ -14,3 +14,8 @@ export const markAllRead = () =>
 
 export const deleteNotification = (notificationId) =>
   apiRequest(`${NOTIFICATIONS_PATH}${notificationId}/`, { method: "DELETE" });
+
+export const fetchNotificationPreferences = () => apiRequest("/notifications/preferences/");
+
+export const updateNotificationPreferences = (payload) =>
+  apiRequest("/notifications/preferences/", { method: "PATCH", body: payload });

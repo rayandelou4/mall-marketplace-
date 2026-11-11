@@ -44,3 +44,32 @@ class NotificationDeletionTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+
+class NotificationPreferenceTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            email="notification-preferences@mall.test",
+            phone_number="+243900000033",
+            username="notification-preferences",
+            password="User123!",
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_user_can_read_and_update_alert_preferences(self):
+        url = reverse("notifications:preferences")
+        initial = self.client.get(url)
+        self.assertEqual(initial.status_code, 200)
+        self.assertTrue(initial.data["price_drop_alerts"])
+        self.assertTrue(initial.data["saved_search_alerts"])
+
+        updated = self.client.patch(
+            url,
+            {"price_drop_alerts": False},
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertFalse(updated.data["price_drop_alerts"])
+        self.assertTrue(updated.data["saved_search_alerts"])

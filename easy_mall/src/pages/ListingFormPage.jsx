@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Trash2 } from "lucide-react";
+import { ImagePlus, Sparkles, Trash2 } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { SectionHeading, LoadingBlock } from "../components/ui/StatusBlocks";
@@ -11,6 +11,7 @@ import { fetchCategories } from "../features/catalog/api";
 import { fetchCountries, fetchAreas } from "../features/localization/api";
 import { WORLD_COUNTRIES, getCountryAlpha2 } from "../features/localization/countries";
 import { fetchProductForEdit, createProduct, updateProduct } from "../features/seller/api";
+import { fetchSellerAssistantConfig, requestListingSuggestions } from "../features/seller/assistantApi";
 import { uploadToCloudinary } from "../lib/cloudinary";
 import { cx } from "../styles/theme";
 
@@ -51,6 +52,11 @@ export default function ListingFormPage() {
     image_2: false,
     image_3: false,
   });
+  const [assistantEnabled, setAssistantEnabled] = useState(false);
+  const [assistantConfigLoading, setAssistantConfigLoading] = useState(true);
+  const [assistantRequesting, setAssistantRequesting] = useState(false);
+  const [assistantError, setAssistantError] = useState(null);
+  const [assistantSuggestions, setAssistantSuggestions] = useState(null);
 
   useEffect(() => {
     if (!isAuthenticated) navigate("/auth");
@@ -72,6 +78,21 @@ export default function ListingFormPage() {
         setSelectedCountryCode(worldCountry?.code || "");
       }
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetchSellerAssistantConfig()
+      .then(({ enabled }) => {
+        if (active) setAssistantEnabled(Boolean(enabled));
+      })
+      .catch(() => {
+        if (active) setAssistantEnabled(false);
+      })
+      .finally(() => {
+        if (active) setAssistantConfigLoading(false);
+      });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -182,19 +203,52 @@ export default function ListingFormPage() {
     }
   }, [categories, form.category, form.item_type]);
 
-  async function handleImageUpload(field, file) {
-    if (!file) return;
-
-    setUploadingImages((prev) => ({ ...prev, [field]: true }));
+  async function handleImageSelection(fileList) {
+    const files = Array.from(fileList || []);
+    const availableFields = ["image_1", "image_2", "image_3"].filter((field) => !form[field]);
+    if (files.length > availableFields.length) {
+      setError("Vous pouvez ajouter jusqu’à trois photos.");
+      return;
+    }
     setError(null);
+    setAssistantSuggestions(null);
 
+    for (const [index, file] of files.entries()) {
+      const field = availableFields[index];
+      setUploadingImages((current) => ({ ...current, [field]: true }));
+      try {
+        const url = await uploadToCloudinary(file);
+        setForm((current) => ({ ...current, [field]: url }));
+      } catch (err) {
+        setError(err.message || "L’envoi d’une photo a échoué.");
+      } finally {
+        setUploadingImages((current) => ({ ...current, [field]: false }));
+      }
+    }
+  }
+
+  async function handleAssistantRequest() {
+    const imageUrls = [form.image_1, form.image_2, form.image_3]
+      .filter((url) => url.startsWith("https://"));
+    if (!imageUrls.length) {
+      setAssistantError("Ajoutez au moins une photo HTTPS pour demander des suggestions.");
+      return;
+    }
+    setAssistantRequesting(true);
+    setAssistantError(null);
+    setAssistantSuggestions(null);
     try {
-      const url = await uploadToCloudinary(file);
-      update(field)(url);
+      const suggestions = await requestListingSuggestions({
+        image_urls: imageUrls,
+        title: form.title,
+        description: form.description,
+        category_id: form.category || null,
+      });
+      setAssistantSuggestions(suggestions);
     } catch (err) {
-      setError(err.message || "L'upload de l'image a échoué.");
+      setAssistantError(err.message);
     } finally {
-      setUploadingImages((prev) => ({ ...prev, [field]: false }));
+      setAssistantRequesting(false);
     }
   }
 
@@ -371,7 +425,7 @@ export default function ListingFormPage() {
               </fieldset>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="block">
                 <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Pays</span>
                 <select value={selectedCountryCode} onChange={(event) => handleCountryChange(event.target.value)} className={inputClass}>
@@ -392,7 +446,7 @@ export default function ListingFormPage() {
               </label>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <TextField label="Ville affichée" value={form.city} onChange={update("city")} required t={t} />
               <TextField label="Pays affiché" value={form.country} onChange={update("country")} required t={t} />
             </div>
@@ -420,42 +474,137 @@ export default function ListingFormPage() {
               </section>
             )}
 
-            <div>
-              <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>
-                Photos — upload Cloudinary ou URL (3 max)
-              </span>
-              <p className={cx("mb-2 text-xs", t.textMuted)}>
-                Tu peux soit sélectionner un fichier, soit coller une URL déjà hébergée.
-              </p>
-              <div className="flex flex-col gap-3">
+            <section aria-label="Photos du produit">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className={cx("text-sm font-medium", t.textPrimary)}>Photos</h2>
+                  <p className={cx("text-xs", t.textMuted)}>Jusqu’à 3 photos. Vous pouvez en sélectionner plusieurs à la fois.</p>
+                </div>
+                <label className={cx("inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold", t.border, t.textPrimary, Object.values(uploadingImages).some(Boolean) && "pointer-events-none opacity-60")}>
+                  <ImagePlus className="h-4 w-4" />
+                  {Object.values(uploadingImages).some(Boolean) ? "Envoi…" : "Ajouter"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    disabled={Object.values(uploadingImages).some(Boolean)}
+                    className="sr-only"
+                    onChange={(event) => {
+                      handleImageSelection(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 {[
-                  ["image_1", "Image 1"],
-                  ["image_2", "Image 2"],
-                  ["image_3", "Image 3"],
+                  ["image_1", "Photo 1"],
+                  ["image_2", "Photo 2"],
+                  ["image_3", "Photo 3"],
                 ].map(([field, label]) => (
-                  <div key={field} className="rounded-xl border border-dashed p-3">
-                    <label className={cx("mb-2 flex cursor-pointer items-center justify-between text-xs font-medium", t.textPrimary)}>
-                      <span>{label}</span>
-                      <span className="rounded-full bg-indigo-500 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white">
-                        {uploadingImages[field] ? "Upload..." : "Choisir un fichier"}
-                      </span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => handleImageUpload(field, e.target.files?.[0])}
-                      />
-                    </label>
-                    <TextField
-                      label={label}
-                      value={form[field]}
-                      onChange={update(field)}
-                      t={t}
-                    />
+                  <div key={field} className={cx("min-w-0 rounded-xl border p-3", t.border, t.cardBg)}>
+                    <div className="relative mb-2 aspect-square overflow-hidden rounded-lg bg-black/5">
+                      {form[field] ? (
+                        <img src={form[field]} alt={label} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className={cx("flex h-full items-center justify-center text-sm", t.textMuted)}>
+                          {uploadingImages[field] ? "Envoi…" : label}
+                        </div>
+                      )}
+                      {form[field] && (
+                        <button
+                          type="button"
+                          onClick={() => setForm((current) => ({ ...current, [field]: "" }))}
+                          aria-label={`Supprimer ${label.toLowerCase()}`}
+                          className="absolute right-2 top-2 rounded-full bg-white p-2 text-rose-600 shadow"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    <TextField label={`URL ${label.toLowerCase()}`} value={form[field]} onChange={update(field)} t={t} />
                   </div>
                 ))}
               </div>
-            </div>
+            </section>
+
+            <section className={cx("rounded-xl border p-4", t.border, t.cardBg)} aria-labelledby="listing-assistant-title">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 id="listing-assistant-title" className={cx("flex items-center gap-2 text-sm font-semibold", t.textPrimary)}>
+                    <Sparkles className="h-4 w-4" /> Assistant annonce
+                  </h2>
+                  <p className={cx("mt-1 text-xs", t.textMuted)}>
+                    Les suggestions restent modifiables. Les photos ne permettent pas de vérifier des caractéristiques techniques invisibles.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="min-h-11 w-auto rounded-lg px-3"
+                  onClick={handleAssistantRequest}
+                  disabled={!assistantEnabled || assistantConfigLoading || assistantRequesting || Object.values(uploadingImages).some(Boolean)}
+                  loading={assistantRequesting}
+                >
+                  {assistantConfigLoading
+                    ? "Vérification…"
+                    : assistantRequesting
+                      ? "Analyse…"
+                      : "Suggérer"}
+                </Button>
+              </div>
+              {!assistantConfigLoading && !assistantEnabled && (
+                <p className={cx("mt-3 text-xs", t.textMuted)} role="status">
+                  Assistant désactivé : aucun fournisseur IA n’est configuré.
+                </p>
+              )}
+              {assistantError && <p className="mt-3 text-sm text-rose-600" role="alert">{assistantError}</p>}
+              {assistantSuggestions && (
+                <div className={cx("mt-4 flex flex-col gap-3 border-t pt-4", t.border)}>
+                  {assistantSuggestions.title && (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className={cx("text-sm", t.textPrimary)}><span className="font-medium">Titre proposé :</span> {assistantSuggestions.title}</p>
+                      <button type="button" onClick={() => update("title")(assistantSuggestions.title)} className="min-h-11 rounded-lg px-3 text-sm font-semibold text-indigo-600">Utiliser</button>
+                    </div>
+                  )}
+                  {assistantSuggestions.description && (
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <p className={cx("min-w-0 flex-1 whitespace-pre-wrap text-sm", t.textPrimary)}><span className="font-medium">Description proposée :</span> {assistantSuggestions.description}</p>
+                      <button type="button" onClick={() => update("description")(assistantSuggestions.description)} className="min-h-11 rounded-lg px-3 text-sm font-semibold text-indigo-600">Utiliser</button>
+                    </div>
+                  )}
+                  {assistantSuggestions.category_id && (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className={cx("text-sm", t.textPrimary)}>
+                        <span className="font-medium">Catégorie :</span>{" "}
+                        {categories.find((category) => category.id === assistantSuggestions.category_id)?.name || "Catégorie suggérée"}
+                      </p>
+                      <button
+                        type="button"
+                        disabled={!listingCategories.some((category) => category.id === assistantSuggestions.category_id)}
+                        onClick={() => update("category")(assistantSuggestions.category_id)}
+                        className="min-h-11 rounded-lg px-3 text-sm font-semibold text-indigo-600 disabled:opacity-50"
+                      >Utiliser</button>
+                    </div>
+                  )}
+                  {assistantSuggestions.visual_attributes?.length > 0 && (
+                    <p className={cx("text-sm", t.textMuted)}><span className="font-medium">Éléments visuellement observables, à vérifier :</span> {assistantSuggestions.visual_attributes.join(", ")}</p>
+                  )}
+                  {assistantSuggestions.keywords?.length > 0 && (
+                    <p className={cx("text-sm", t.textMuted)}><span className="font-medium">Mots-clés proposés :</span> {assistantSuggestions.keywords.join(", ")}</p>
+                  )}
+                  {assistantSuggestions.quality_suggestions?.length > 0 && (
+                    <div className={cx("text-sm", t.textMuted)}>
+                      <p className="font-medium">Pistes d’amélioration</p>
+                      <ul className="mt-1 list-inside list-disc">
+                        {assistantSuggestions.quality_suggestions.map((suggestion, index) => <li key={`${index}-${suggestion}`}>{suggestion}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  <p className="text-xs text-amber-700">{assistantSuggestions.disclaimer}</p>
+                </div>
+              )}
+            </section>
 
             <label className="block">
               <span className={cx("mb-1 block text-sm font-medium", t.textPrimary)}>Statut</span>
@@ -473,7 +622,11 @@ export default function ListingFormPage() {
             >
               {Object.values(uploadingImages).some(Boolean)
                 ? "Préparation des photos…"
-                : isEdit ? "Enregistrer" : "Publier l'annonce"}
+                : form.status === "draft"
+                  ? "Enregistrer le brouillon"
+                  : form.status === "archived"
+                    ? "Archiver l'annonce"
+                    : isEdit ? "Enregistrer les modifications" : "Publier l'annonce"}
             </Button>
           </form>
         )}

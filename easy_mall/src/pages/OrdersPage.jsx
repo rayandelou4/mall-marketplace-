@@ -172,9 +172,9 @@ export default function OrdersPage() {
     }
   }
 
-  async function handleSubmitDispute(order, { reason, description }) {
+  async function handleSubmitDispute(order, { reason, description, evidence_urls }) {
     try {
-      await createDispute({ order_id: order.id, reason, description });
+      await createDispute({ order_id: order.id, reason, description, evidence_urls });
       setOpenDispute(null);
       load();
     } catch (err) {
@@ -188,6 +188,9 @@ export default function OrdersPage() {
 
       <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
         <SectionHeading title="Mes commandes" t={t} />
+        <Link to="/litiges" className="mb-5 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-indigo-600 hover:underline">
+          <AlertTriangle className="h-4 w-4" /> Centre de résolution et suivi des litiges
+        </Link>
 
         {state.loading ? (
           <LoadingBlock t={t} />
@@ -299,6 +302,7 @@ export default function OrdersPage() {
                     t={t}
                     reasons={DISPUTE_REASONS}
                     submitLabel="Envoyer le litige"
+                    allowImages
                     onSubmit={(message) => handleSubmitDispute(order, message)}
                     onCancel={() => setOpenDispute(null)}
                   />

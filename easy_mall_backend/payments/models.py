@@ -13,6 +13,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -68,6 +69,11 @@ class PaymentProvider(models.Model):
         related_name="payment_providers",
     )
     is_active = models.BooleanField(default=True)
+    adapter_path = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Chemin Python de l'adaptateur serveur; les secrets restent dans l'environnement.",
+    )
 
     class Meta:
         db_table = "payment_providers"
@@ -127,11 +133,19 @@ class Payment(models.Model):
         PENDING = "pending", _("En attente")
         HELD_ESCROW = "held_escrow", _("Retenu (escrow)")
         COMPLETED = "completed", _("Complété")
+        SUCCESSFUL = "successful", _("Réussi")
         FAILED = "failed", _("Échoué")
         REFUNDED = "refunded", _("Remboursé")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    order = models.ForeignKey("orders.Order", on_delete=models.PROTECT, related_name="payments")
+    order = models.ForeignKey(
+        "orders.Order", on_delete=models.PROTECT, related_name="payments",
+        null=True, blank=True,
+    )
+    subscription = models.ForeignKey(
+        "subscriptions.Subscription", on_delete=models.PROTECT,
+        related_name="payments", null=True, blank=True,
+    )
     provider = models.ForeignKey(
         PaymentProvider, on_delete=models.PROTECT, related_name="payments"
     )
@@ -142,6 +156,9 @@ class Payment(models.Model):
     currency = models.CharField(max_length=3)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
     transaction_reference = models.CharField(max_length=100, unique=True)
+    external_reference = models.CharField(max_length=150, blank=True)
+    idempotency_key = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    metadata = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
@@ -156,6 +173,15 @@ class Payment(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["status", "escrow_release_at"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(order__isnull=False, subscription__isnull=True)
+                    | Q(order__isnull=True, subscription__isnull=False)
+                ),
+                name="payment_single_commercial_subject",
+            ),
         ]
 
     def __str__(self):
@@ -194,3 +220,36 @@ class Commission(models.Model):
 
     def __str__(self):
         return f"Commission {self.rate}% — {self.amount} (commande {self.order_id})"
+
+
+class PaymentWebhookEvent(models.Model):
+    class Status(models.TextChoices):
+        RECEIVED = "received", _("Reçu")
+        PROCESSED = "processed", _("Traité")
+        REJECTED = "rejected", _("Rejeté")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(
+        PaymentProvider, on_delete=models.PROTECT, related_name="webhook_events"
+    )
+    payment = models.ForeignKey(
+        Payment, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="webhook_events",
+    )
+    external_event_id = models.CharField(max_length=150)
+    event_type = models.CharField(max_length=80, blank=True)
+    payload_sha256 = models.CharField(max_length=64)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.RECEIVED)
+    error_code = models.CharField(max_length=80, blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "payment_webhook_events"
+        ordering = ["-received_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "external_event_id"],
+                name="unique_provider_webhook_event",
+            )
+        ]

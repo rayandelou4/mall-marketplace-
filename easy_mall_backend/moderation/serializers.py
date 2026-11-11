@@ -11,7 +11,7 @@ from accounts.models import User
 from messaging.models import Message
 from orders.models import Order
 
-from .models import AccountModerationAction, Dispute, MessageReport, ModerationAction, ProductReport
+from .models import AccountModerationAction, Dispute, DisputeMessage, MessageReport, ModerationAction, ProductReport
 
 
 class ProductReportSerializer(serializers.ModelSerializer):
@@ -85,13 +85,6 @@ class ProductReportCreateSerializer(serializers.Serializer):
             evidence=[{"author": request.user.username, "message": description, "source": "report"}],
         )
 
-        if report.is_high_risk:
-            product.is_suspended = True
-            product.suspension_reason = "Suspension temporaire déclenchée par un signalement à risque élevé."
-            product.status_before_suspension = product.status
-            product.suspended_at = timezone.now()
-            product.save(update_fields=["is_suspended", "suspension_reason", "status_before_suspension", "suspended_at"])
-
         ModerationAction.objects.create(
             report=report,
             actor=request.user,
@@ -102,6 +95,7 @@ class ProductReportCreateSerializer(serializers.Serializer):
 
 
 class DisputeSerializer(serializers.ModelSerializer):
+    reason_display = serializers.CharField(source="get_reason_display", read_only=True)
     order_status = serializers.CharField(source="order.status", read_only=True)
     seller_username = serializers.CharField(source="seller.username", read_only=True)
     seller_is_suspended = serializers.BooleanField(source="seller.is_suspended", read_only=True)
@@ -109,13 +103,17 @@ class DisputeSerializer(serializers.ModelSerializer):
     raised_by_is_suspended = serializers.BooleanField(source="raised_by.is_suspended", read_only=True)
     can_view_private_evidence = serializers.SerializerMethodField()
     evidence_view = serializers.SerializerMethodField()
+    messages = serializers.SerializerMethodField()
+    appeal_allowed = serializers.SerializerMethodField()
 
     class Meta:
         model = Dispute
         fields = [
             "id", "order", "order_status", "seller", "seller_username", "seller_is_suspended",
-            "raised_by", "raised_by_username", "raised_by_is_suspended", "reason", "description", "status",
+            "raised_by", "raised_by_username", "raised_by_is_suspended", "reason", "reason_display", "description", "status",
             "resolution", "evidence", "private_evidence", "case_history", "review_notes",
+            "appeal_deadline", "appealed_at", "appeal_allowed", "refund_status",
+            "refund_amount", "refund_reference", "messages",
             "can_view_private_evidence", "evidence_view", "created_at", "updated_at", "resolved_at",
         ]
         read_only_fields = fields
@@ -131,11 +129,39 @@ class DisputeSerializer(serializers.ModelSerializer):
             return []
         return obj.private_evidence or obj.evidence
 
+    def get_messages(self, obj):
+        return DisputeMessageSerializer(
+            obj.messages.select_related("author").all(), many=True
+        ).data
+
+    def get_appeal_allowed(self, obj):
+        request = self.context.get("request")
+        if not request or request.user not in (obj.raised_by, obj.seller):
+            return False
+        return bool(
+            obj.status in {Dispute.Status.RESOLVED, Dispute.Status.REJECTED, Dispute.Status.CLOSED}
+            and obj.appeal_deadline
+            and obj.appeal_deadline > timezone.now()
+        )
+
+
+class DisputeMessageSerializer(serializers.ModelSerializer):
+    author_username = serializers.CharField(source="author.username", read_only=True, allow_null=True)
+    kind_display = serializers.CharField(source="get_kind_display", read_only=True)
+
+    class Meta:
+        model = DisputeMessage
+        fields = ["id", "author", "author_username", "kind", "kind_display", "body", "evidence", "created_at"]
+        read_only_fields = fields
+
 
 class DisputeCreateSerializer(serializers.Serializer):
     order_id = serializers.UUIDField()
-    reason = serializers.CharField(max_length=40)
-    description = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+    reason = serializers.ChoiceField(choices=Dispute.Reason.choices)
+    description = serializers.CharField(max_length=4000, trim_whitespace=True)
+    evidence_urls = serializers.ListField(
+        child=serializers.URLField(schemes=["https"]), required=False, max_length=5
+    )
 
     def validate_order_id(self, value):
         request = self.context["request"]
@@ -164,13 +190,32 @@ class DisputeCreateSerializer(serializers.Serializer):
             raised_by=request.user,
             reason=self.validated_data["reason"],
             description=self.validated_data.get("description", ""),
-            evidence=[{"author": request.user.username, "message": self.validated_data.get("description", ""), "source": "dispute"}],
-            private_evidence=[{"author": request.user.username, "message": self.validated_data.get("description", ""), "source": "private_dispute"}],
+            evidence=[
+                {"author": request.user.username, "message": self.validated_data["description"], "source": "dispute"},
+                *[{"author": request.user.username, "image_url": url, "source": "photo"} for url in self.validated_data.get("evidence_urls", [])],
+            ],
+            private_evidence=[
+                {"author": request.user.username, "message": self.validated_data["description"], "source": "private_dispute"},
+                *[{"author": request.user.username, "image_url": url, "source": "photo"} for url in self.validated_data.get("evidence_urls", [])],
+            ],
             case_history=[{"actor": request.user.username, "status": "open", "at": timezone.now().isoformat()}],
+        )
+        DisputeMessage.objects.create(
+            dispute=dispute,
+            author=request.user,
+            body=self.validated_data["description"],
+            evidence=[{"image_url": url} for url in self.validated_data.get("evidence_urls", [])],
         )
         order.status = Order.Status.DISPUTED
         order.save(update_fields=["status"])
         return dispute
+
+
+class DisputeMessageCreateSerializer(serializers.Serializer):
+    body = serializers.CharField(max_length=4000, trim_whitespace=True)
+    evidence_urls = serializers.ListField(
+        child=serializers.URLField(schemes=["https"]), required=False, max_length=5
+    )
 
 
 class MessageReportSerializer(serializers.ModelSerializer):

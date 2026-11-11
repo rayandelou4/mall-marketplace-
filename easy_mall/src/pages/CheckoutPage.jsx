@@ -16,12 +16,17 @@ import {
   updatePrivateAddress,
 } from "../features/localization/api";
 import { createOrder } from "../features/orders/api";
+import { fetchCheckoutQuote, fetchLoyaltyStatus } from "../features/promotions/api";
 import { formatPrice } from "../lib/format";
 import { cx } from "../styles/theme";
 import { WORLD_COUNTRIES } from "../features/localization/countries";
 
 function getItemShippingCost(product) {
   return product.sale_method === "pickup" ? 0 : Number(product.shipping_cost || 0);
+}
+
+function getItemUnitPrice(product, negotiation) {
+  return Number(negotiation?.accepted_price ?? product.price);
 }
 
 export default function CheckoutPage() {
@@ -67,6 +72,20 @@ export default function CheckoutPage() {
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [loyalty, setLoyalty] = useState(null);
+  const [pointsToRedeem, setPointsToRedeem] = useState(0);
+  const [checkoutQuote, setCheckoutQuote] = useState(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState(null);
+  const quoteItemsKey = JSON.stringify(checkoutItems.map(({ product, variant, quantity, visitorId, negotiation }) => ({
+    product_id: product.id,
+    ...(variant?.id ? { variant_id: variant.id } : {}),
+    ...(negotiation?.id ? { negotiation_id: negotiation.id } : {}),
+    quantity,
+    ...(visitorId ? { conversion_visitor_id: visitorId } : {}),
+    unit_price: negotiation?.accepted_price ?? product.price,
+    shipping_cost: product.shipping_cost || 0,
+  })));
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -93,6 +112,31 @@ export default function CheckoutPage() {
       })
       .catch((err) => setAddressError(err.message));
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    fetchLoyaltyStatus().then(setLoyalty).catch(() => setLoyalty(null));
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !activeCurrency || !checkoutItems.length) {
+      setCheckoutQuote(null);
+      setQuoteLoading(false);
+      return undefined;
+    }
+    let active = true;
+    setQuoteLoading(true);
+    setQuoteError(null);
+    setCheckoutQuote(null);
+    fetchCheckoutQuote({
+      items: JSON.parse(quoteItemsKey),
+      points_to_redeem: Number(pointsToRedeem) || 0,
+    })
+      .then((quote) => { if (active) setCheckoutQuote(quote); })
+      .catch((quoteRequestError) => { if (active) setQuoteError(quoteRequestError.message); })
+      .finally(() => { if (active) setQuoteLoading(false); });
+    return () => { active = false; };
+  }, [isAuthenticated, activeCurrency, quoteItemsKey, pointsToRedeem, checkoutItems.length]);
 
   useEffect(() => {
     if (!addressDraft.countryId) {
@@ -161,6 +205,7 @@ export default function CheckoutPage() {
       const createdOrder = await createOrder({
         privateAddressId: requiresDelivery ? selectedAddressId : undefined,
         items: checkoutItems,
+        pointsToRedeem,
       });
       setOrder(createdOrder);
       clearCurrency(activeCurrency);
@@ -191,7 +236,7 @@ export default function CheckoutPage() {
                     <button key={currency} type="button" onClick={() => setSelectedCurrency(currency)} className={cx("rounded-full border px-4 py-2 text-sm font-semibold", t.border, t.textPrimary)}>
                       {currency} · {formatPrice(items
                         .filter(({ product }) => (product.currency || "USD") === currency)
-                        .reduce((sum, { product, quantity }) => sum + Number(product.price) * quantity + getItemShippingCost(product), 0), currency)}
+                        .reduce((sum, { product, quantity, negotiation }) => sum + getItemUnitPrice(product, negotiation) * quantity + getItemShippingCost(product), 0), currency)}
                     </button>
                   ))}
                 </div>
@@ -200,20 +245,55 @@ export default function CheckoutPage() {
             {hasUnavailableStock && <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">Le stock disponible a changé pour au moins un article. Retournez au panier et ajustez les quantités.</p>}
             <div className={cx("rounded-2xl border p-4", t.cardBorder, t.cardBg)}>
               <p className={cx("mb-2 text-sm font-semibold", t.textPrimary)}>Récapitulatif {activeCurrency}</p>
-              {checkoutItems.map(({ product, variant, quantity }) => (
-                <div key={`${product.id}:${variant?.id || ""}`} className="flex justify-between gap-4 py-1 text-sm">
+              {checkoutItems.map(({ product, variant, quantity, negotiation }) => {
+                const quoteLine = checkoutQuote?.items.find((line) => line.product_id === product.id
+                  && line.variant_id === (variant?.id || null)
+                  && line.negotiation_id === (negotiation?.id || null));
+                const lineAmount = quoteLine
+                  ? Number(quoteLine.unit_price) * quantity + Number(quoteLine.shipping_cost) - Number(quoteLine.loyalty_discount)
+                  : getItemUnitPrice(product, negotiation) * quantity + getItemShippingCost(product);
+                return (
+                <div key={`${product.id}:${variant?.id || ""}:${negotiation?.id || ""}`} className="flex justify-between gap-4 py-1 text-sm">
                   <span className={t.textMuted}>
                     {product.title}{variant ? ` · ${variant.label}` : ""} × {quantity}{product.sale_method === "pickup"
                       ? " · retrait en boutique"
-                      : ` · livraison${getItemShippingCost(product) > 0 ? ` ${formatPrice(getItemShippingCost(product), product.currency)}` : ""}`}
+                      : quoteLine?.original_shipping_cost > 0 && quoteLine.shipping_cost === 0
+                        ? " · livraison offerte"
+                        : ` · livraison${getItemShippingCost(product) > 0 ? ` ${formatPrice(quoteLine?.shipping_cost ?? getItemShippingCost(product), product.currency)}` : ""}`}
+                    {quoteLine?.promotion_name && <span className="block text-xs font-medium text-emerald-700">{quoteLine.promotion_name}</span>}
                   </span>
-                  <span className="shrink-0 font-mono">{formatPrice(Number(product.price) * quantity + getItemShippingCost(product), product.currency)}</span>
+                  <span className="shrink-0 text-right font-mono">
+                    {quoteLine?.promotion_discount > 0 && <span className={cx("mr-2 text-xs line-through", t.textMuted)}>{formatPrice(Number(quoteLine.original_unit_price) * quantity + Number(quoteLine.original_shipping_cost), product.currency)}</span>}
+                    {formatPrice(lineAmount, product.currency)}
+                    {quoteLine?.loyalty_discount > 0 && <span className="block text-xs text-emerald-700">Fidélité −{formatPrice(quoteLine.loyalty_discount, product.currency)}</span>}
+                  </span>
                 </div>
-              ))}
+              );})}
+              {loyalty?.is_active && loyalty.points_balance > 0 && (
+                <label className={cx("mt-3 flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-sm", t.border)}>
+                  <span>
+                    <span className={cx("block font-medium", t.textPrimary)}>Points fidélité</span>
+                    <span className={cx("text-xs", t.textMuted)}>{loyalty.points_balance} point(s) disponibles · maximum {loyalty.max_redemption_percent}% du panier</span>
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    max={loyalty.points_balance}
+                    step="1"
+                    value={pointsToRedeem}
+                    onChange={(event) => setPointsToRedeem(Math.min(loyalty.points_balance, Math.max(0, Number(event.target.value) || 0)))}
+                    aria-label="Points fidélité à utiliser"
+                    className={cx("w-28 rounded-lg border px-3 py-2", t.border, t.inputBg, t.textPrimary)}
+                  />
+                </label>
+              )}
+              {quoteLoading && <p className={cx("mt-2 text-xs", t.textMuted)}>Calcul des promotions…</p>}
+              {quoteError && <p className="mt-2 text-xs text-amber-700">Aperçu indisponible : le total sera recalculé par le serveur à la commande.</p>}
               {activeCurrency && <div className={cx("mt-2 flex justify-between border-t pt-2 text-sm font-semibold", t.border)}>
                 <span>Total à payer ({activeCurrency})</span>
-                <span className="font-mono">{formatPrice(checkoutItems.reduce((sum, { product, quantity }) => sum + Number(product.price) * quantity + getItemShippingCost(product), 0), activeCurrency)}</span>
+                <span className="font-mono">{formatPrice(checkoutQuote?.total ?? checkoutItems.reduce((sum, { product, quantity, negotiation }) => sum + getItemUnitPrice(product, negotiation) * quantity + getItemShippingCost(product), 0), activeCurrency)}</span>
               </div>}
+              {checkoutQuote?.loyalty_discount > 0 && <p className={cx("mt-1 text-right text-xs", t.textMuted)}>{checkoutQuote.points_redeemed} point(s) utilisés · Économie {formatPrice(checkoutQuote.loyalty_discount, activeCurrency)}</p>}
             </div>
 
             {requiresDelivery ? <section className={cx("rounded-2xl border p-4", t.cardBorder, t.cardBg)}>

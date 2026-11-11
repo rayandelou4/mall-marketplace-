@@ -1,4 +1,7 @@
+from datetime import timedelta
+
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -54,9 +57,61 @@ class GlobalStatsAPITests(TestCase):
 
 		self.assertEqual(response.status_code, 200, response.content)
 		self.assertEqual(response.data["users"]["total"], 4)
+		self.assertEqual(response.data["sellers"]["total"], 0)
 		self.assertIn("active_listings", response.data["products"])
 		self.assertIn("pending", response.data["verification"])
 		self.assertIn("no-store", response.headers["Cache-Control"])
+
+	def test_seller_totals_count_only_accounts_with_available_listings(self):
+		category = Category.objects.create(name="Annonces actives")
+		Product.objects.create(
+			seller=self.individual,
+			category=category,
+			title="Produit disponible",
+			description="Test",
+			price="20.00",
+			currency="USD",
+			city="Kinshasa",
+			country="RDC",
+			stock_quantity=1,
+			status=Product.Status.PUBLISHED,
+			moderation_status=Product.ModerationStatus.APPROVED,
+		)
+		Product.objects.create(
+			seller=self.professional,
+			category=category,
+			title="Service disponible",
+			description="Test",
+			price="20.00",
+			currency="USD",
+			city="Kinshasa",
+			country="RDC",
+			stock_quantity=0,
+			item_type=Product.ItemType.SERVICE,
+			status=Product.Status.PUBLISHED,
+			moderation_status=Product.ModerationStatus.APPROVED,
+		)
+		Product.objects.create(
+			seller=self.buyer,
+			category=category,
+			title="Produit épuisé",
+			description="Test",
+			price="20.00",
+			currency="USD",
+			city="Kinshasa",
+			country="RDC",
+			stock_quantity=0,
+			status=Product.Status.PUBLISHED,
+			moderation_status=Product.ModerationStatus.APPROVED,
+		)
+		self.client.force_authenticate(self.staff)
+
+		response = self.client.get(self.url)
+
+		self.assertEqual(response.status_code, 200, response.content)
+		self.assertEqual(response.data["sellers"]["total"], 2)
+		self.assertEqual(response.data["sellers"]["individual"], 1)
+		self.assertEqual(response.data["sellers"]["professional"], 1)
 
 	def test_admin_revenue_uses_delivered_orders_and_recorded_commissions(self):
 		delivered = Order.objects.create(
@@ -128,7 +183,7 @@ class SellerStatsAPITests(TestCase):
 			country="RDC",
 		)
 
-	def add_order_item(self, buyer, seller, product, status, quantity):
+	def add_order_item(self, buyer, seller, product, status, quantity, loyalty_discount="0.00"):
 		order = Order.objects.create(
 			buyer=buyer,
 			status=status,
@@ -142,12 +197,13 @@ class SellerStatsAPITests(TestCase):
 			product_title=product.title,
 			quantity=quantity,
 			unit_price=product.price,
+			loyalty_discount=loyalty_discount,
 		)
 		return order
 
 	def test_seller_stats_are_scoped_and_exclude_unfinished_sales(self):
 		self.add_order_item(
-			self.buyer, self.seller, self.product, Order.Status.DELIVERED, 2
+			self.buyer, self.seller, self.product, Order.Status.DELIVERED, 2, "5.00"
 		)
 		self.add_order_item(
 			self.buyer, self.seller, self.product, Order.Status.PENDING, 4
@@ -166,6 +222,28 @@ class SellerStatsAPITests(TestCase):
 		self.assertEqual(response.data["sales"]["orders_received"], 2)
 		self.assertEqual(response.data["sales"]["orders_pending"], 1)
 		self.assertEqual(response.data["transactions"]["successful"], 1)
-		self.assertEqual(response.data["sales"]["revenue_by_currency"][0]["amount"], 60)
+		self.assertEqual(response.data["sales"]["revenue_by_currency"][0]["amount"], 55)
 		self.assertEqual(response.data["sales"]["top_products"][0]["product_title"], self.product.title)
 		self.assertEqual(response.data["sales"]["series"][0]["units"], 2)
+
+	def test_period_sales_exclude_delivered_orders_outside_selected_window(self):
+		self.add_order_item(
+			self.buyer, self.seller, self.product, Order.Status.DELIVERED, 2
+		)
+		old_order = self.add_order_item(
+			self.buyer, self.seller, self.product, Order.Status.DELIVERED, 3
+		)
+		Order.objects.filter(pk=old_order.pk).update(
+			created_at=timezone.now() - timedelta(days=40)
+		)
+		self.client.force_authenticate(self.seller)
+
+		response = self.client.get("/api/v1/analytics/seller/?period=daily")
+
+		self.assertEqual(response.status_code, 200, response.content)
+		self.assertEqual(response.data["sales"]["units"], 5)
+		self.assertEqual(response.data["period_sales"]["units"], 2)
+		self.assertEqual(response.data["period_sales"]["products_sold"], 1)
+		self.assertEqual(response.data["period_sales"]["orders"], 1)
+		self.assertEqual(response.data["period_sales"]["orders_received"], 1)
+		self.assertEqual(response.data["period_sales"]["revenue_by_currency"][0]["amount"], 60)

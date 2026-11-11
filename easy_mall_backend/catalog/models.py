@@ -421,6 +421,12 @@ class Favorite(models.Model):
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name="favorited_by"
     )
+    target_price = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    last_notified_price = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

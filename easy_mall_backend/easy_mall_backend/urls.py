@@ -30,5 +30,10 @@ urlpatterns = [
     path("api/v1/notifications/", include("notifications.urls")),
     path("api/v1/localization/", include("localization.urls")),
     path("api/v1/seller-verification/", include("seller_verification.urls")),
+    path("api/v1/promotions/", include("promotions.urls")),
+    path("api/v1/seller-assistant/", include("seller_assistant.urls")),
+    path("api/v1/negotiations/", include("negotiations.urls")),
+    path("api/v1/visual-search/", include("visual_search.urls")),
+    path("api/v1/buyer-assistant/", include("buyer_assistant.urls")),
 
 ]

@@ -94,7 +94,9 @@ export default function ProfilePage() {
   }
 
   const { loading, error, profile, products, reviews } = state;
-  const shopUrl = typeof window === "undefined" ? "" : window.location.href;
+  const shopUrl = typeof window === "undefined"
+    ? ""
+    : `${window.location.origin}/boutique/${encodeURIComponent(username)}`;
   const shopName = profile?.shop_name || profile?.username || "Boutique";
   const categoryOptions = [...new Map(products.filter((product) => product.category).map((product) => [product.category, product.category_name || "Autres"])).entries()];
   const visibleProducts = categoryFilter === "all" ? products : products.filter((product) => product.category === categoryFilter);

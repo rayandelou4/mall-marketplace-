@@ -59,6 +59,9 @@ export const fetchFavorites = () => apiRequest("/catalog/favorites/").then(unwra
 
 export const removeFavorite = (favoriteId) => apiRequest(`/catalog/favorites/${favoriteId}/`, { method: "DELETE" });
 
+export const updateFavorite = (favoriteId, payload) =>
+  apiRequest(`/catalog/favorites/${favoriteId}/`, { method: "PATCH", body: payload });
+
 export const fetchSellerFavorites = () => apiRequest("/catalog/seller-favorites/").then(unwrap);
 
 export const addSellerFavorite = (sellerId) => apiRequest("/catalog/seller-favorites/", {

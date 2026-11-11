@@ -23,6 +23,8 @@ class Notification(models.Model):
         DELIVERY = "delivery", _("Livraison")
         NEW_FAVORITE = "new_favorite", _("Nouveau favori")
         PROMOTION = "promotion", _("Promotion")
+        PRICE_DROP = "price_drop", _("Baisse de prix")
+        SAVED_SEARCH_MATCH = "saved_search_match", _("Nouvelle annonce correspondant à une recherche")
         PRODUCT_REPORTED = "product_reported", _("Annonce signalée")
         REPORT_DECISION = "report_decision", _("Décision de modération")
         DISPUTE_OPENED = "dispute_opened", _("Litige ouvert")
@@ -30,10 +32,16 @@ class Notification(models.Model):
         DISPUTE_RESOLVED = "dispute_resolved", _("Litige résolu")
         LISTING_SUSPENDED = "listing_suspended", _("Annonce suspendue")
         VERIFICATION_UPDATE = "verification_update", _("Mise à jour de vérification")
+        SUBSCRIPTION_CONFIRMED = "subscription_confirmed", _("Abonnement confirmé")
+        SUBSCRIPTION_PAYMENT_FAILED = "subscription_payment_failed", _("Paiement d'abonnement échoué")
+        SUBSCRIPTION_EXPIRING = "subscription_expiring", _("Abonnement bientôt expiré")
+        SUBSCRIPTION_EXPIRED = "subscription_expired", _("Abonnement expiré")
+        SUBSCRIPTION_CANCELLED = "subscription_cancelled", _("Abonnement annulé")
+        SUBSCRIPTION_RENEWED = "subscription_renewed", _("Abonnement renouvelé")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications")
-    notification_type = models.CharField(max_length=20, choices=NotificationType.choices)
+    notification_type = models.CharField(max_length=32, choices=NotificationType.choices)
     title = models.CharField(max_length=150)
     body = models.TextField(blank=True)
     link_path = models.CharField(max_length=255, blank=True)
@@ -46,3 +54,20 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.get_notification_type_display()} — {self.user}"
+
+
+class NotificationPreference(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notification_preferences",
+    )
+    price_drop_alerts = models.BooleanField(default=True)
+    saved_search_alerts = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "notification_preferences"
+
+    def __str__(self):
+        return f"Préférences de notification — {self.user}"

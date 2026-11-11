@@ -13,6 +13,7 @@ router = DefaultRouter()
 router.register("notifications", views.NotificationViewSet, basename="notification")
 
 urlpatterns = [
+    path("preferences/", views.NotificationPreferencesView.as_view(), name="preferences"),
     path("", include(router.urls)),
 ]
 

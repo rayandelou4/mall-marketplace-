@@ -13,6 +13,7 @@ from accounts.models import User
 from notifications.models import Notification
 from notifications.services import notify
 from payments.services import release_order_payment
+from promotions.services import award_order_points
 
 from .models import Order, OrderItem
 from .serializers import (
@@ -93,6 +94,7 @@ class OrderViewSet(
                     {"detail": str(exc)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            award_order_points(order)
             return Response(OrderDetailSerializer(order).data)
 
         if settings.PAYMENTS_MODE == "online":
@@ -103,6 +105,7 @@ class OrderViewSet(
                 )
             order.status = Order.Status.DELIVERED
             order.save(update_fields=["status"])
+            award_order_points(order)
             return Response(OrderDetailSerializer(order).data)
 
         order = Order.objects.select_for_update().get(pk=order.pk)
@@ -125,6 +128,7 @@ class OrderViewSet(
         seller_ids = list(order.items.values_list("seller_id", flat=True).distinct())
         order.status = Order.Status.DELIVERED
         order.save(update_fields=["status"])
+        award_order_points(order)
         User.objects.filter(pk__in=seller_ids).update(total_sales=F("total_sales") + 1)
         if order.checkout_group_id:
             from .models import CheckoutGroup

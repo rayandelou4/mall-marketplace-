@@ -2,7 +2,11 @@
 Vues de l'app `moderation`.
 """
 
+from datetime import timedelta
+from decimal import Decimal, InvalidOperation
+
 from django.db import transaction
+from django.db.models import Q
 from django.utils.decorators import method_decorator
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -15,10 +19,11 @@ from notifications.services import notify_moderation_event
 
 from accounts.models import User
 
-from .models import AccountModerationAction, Dispute, MessageReport, ModerationAction, ProductReport
+from .models import AccountModerationAction, Dispute, DisputeMessage, MessageReport, ModerationAction, ProductReport
 from .serializers import (
     AccountModerationActionSerializer,
     DisputeCreateSerializer,
+    DisputeMessageCreateSerializer,
     DisputeSerializer,
     MessageReportCreateSerializer,
     MessageReportSerializer,
@@ -36,7 +41,7 @@ class IsModerationAdmin(permissions.BasePermission):
             return False
 
         action = getattr(view, "action", None)
-        if action in {"list", "retrieve"} and not request.user.is_staff:
+        if action in {"list", "retrieve", "reply", "appeal"} and not request.user.is_staff:
             return True
 
         required_permission = getattr(view, "admin_permissions", {}).get(action)
@@ -157,7 +162,9 @@ class DisputeViewSet(
         user = self.request.user
         if user.is_staff:
             return Dispute.objects.select_related("order", "seller", "raised_by", "reviewed_by").all()
-        return Dispute.objects.filter(raised_by=user).select_related("order", "seller")
+        return Dispute.objects.filter(
+            Q(raised_by=user) | Q(seller=user)
+        ).select_related("order", "seller", "raised_by", "reviewed_by").distinct()
 
     def get_serializer_class(self):
         return DisputeCreateSerializer if self.action == "create" else DisputeSerializer
@@ -183,6 +190,70 @@ class DisputeViewSet(
         serializer = self.get_serializer(dispute, context={"request": request})
         return Response(serializer.data)
 
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def reply(self, request, pk=None):
+        dispute = self.get_object()
+        if request.user not in (dispute.raised_by, dispute.seller):
+            raise PermissionDenied("Vous ne participez pas à ce litige.")
+        if dispute.status in {Dispute.Status.RESOLVED, Dispute.Status.REJECTED, Dispute.Status.CLOSED}:
+            return Response({"detail": "Ce litige est clôturé; contestez la décision pour le rouvrir."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = DisputeMessageCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        message = DisputeMessage.objects.create(
+            dispute=dispute,
+            author=request.user,
+            body=serializer.validated_data["body"],
+            evidence=[{"image_url": url} for url in serializer.validated_data.get("evidence_urls", [])],
+        )
+        dispute.case_history = [
+            *(dispute.case_history or []),
+            {"actor": request.user.username, "status": dispute.status, "at": timezone.now().isoformat(), "message": message.body},
+        ]
+        dispute.save(update_fields=["case_history", "updated_at"])
+        recipient = dispute.seller if request.user == dispute.raised_by else dispute.raised_by
+        notify_moderation_event(
+            recipient,
+            "dispute_update",
+            "Nouveau message dans un litige",
+            f"@{request.user.username} a ajouté un message au dossier {dispute.pk}.",
+            "/litiges",
+        )
+        return Response(DisputeSerializer(dispute, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def appeal(self, request, pk=None):
+        dispute = self.get_object()
+        if request.user not in (dispute.raised_by, dispute.seller):
+            raise PermissionDenied("Vous ne participez pas à ce litige.")
+        if (
+            dispute.status not in {Dispute.Status.RESOLVED, Dispute.Status.REJECTED, Dispute.Status.CLOSED}
+            or dispute.appeal_deadline is None
+            or dispute.appeal_deadline <= timezone.now()
+        ):
+            return Response({"detail": "La période de contestation est terminée ou indisponible."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = DisputeMessageCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        message = DisputeMessage.objects.create(
+            dispute=dispute,
+            author=request.user,
+            kind=DisputeMessage.Kind.APPEAL,
+            body=serializer.validated_data["body"],
+            evidence=[{"image_url": url} for url in serializer.validated_data.get("evidence_urls", [])],
+        )
+        dispute.status = Dispute.Status.UNDER_REVIEW
+        dispute.appealed_at = timezone.now()
+        dispute.resolved_at = None
+        dispute.case_history = [
+            *(dispute.case_history or []),
+            {"actor": request.user.username, "status": "appealed", "at": dispute.appealed_at.isoformat(), "message": message.body},
+        ]
+        dispute.save(update_fields=["status", "appealed_at", "resolved_at", "case_history", "updated_at"])
+        return Response(DisputeSerializer(dispute, context={"request": request}).data)
+
     @transaction.atomic
     @action(detail=True, methods=["post"])
     def review(self, request, pk=None):
@@ -190,6 +261,10 @@ class DisputeViewSet(
         next_status = request.data.get("status")
         resolution = request.data.get("resolution", "")
         review_notes = request.data.get("review_notes", resolution)
+        refund_status = request.data.get("refund_status", dispute.refund_status)
+        refund_amount = request.data.get("refund_amount")
+        refund_reference = request.data.get("refund_reference", "")
+        reporter_abuse = request.data.get("reporter_abuse", False)
         if not isinstance(resolution, str) or not isinstance(review_notes, str):
             return Response({"detail": "Les notes doivent être du texte."}, status=status.HTTP_400_BAD_REQUEST)
         resolution = resolution.strip()
@@ -200,14 +275,34 @@ class DisputeViewSet(
                 {"resolution": "Une décision motivée est requise pour clôturer ce litige."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if refund_status not in Dispute.RefundStatus.values:
+            return Response({"refund_status": "Statut de remboursement invalide."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            refund_amount = Decimal(str(refund_amount)) if refund_amount not in (None, "") else None
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({"refund_amount": "Montant de remboursement invalide."}, status=status.HTTP_400_BAD_REQUEST)
+        if refund_amount is not None and (not refund_amount.is_finite() or refund_amount < 0 or refund_amount > dispute.order.total_amount):
+            return Response({"refund_amount": "Le montant dépasse le total de cette sous-commande."}, status=status.HTTP_400_BAD_REQUEST)
+        if refund_status == Dispute.RefundStatus.COMPLETED and (refund_amount is None or not refund_reference.strip()):
+            return Response({"refund_reference": "Un montant et une référence sont requis pour confirmer le remboursement."}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(reporter_abuse, bool) or (reporter_abuse and next_status != Dispute.Status.REJECTED):
+            return Response({"reporter_abuse": "Un signalement abusif doit être confirmé avec une décision de rejet."}, status=status.HTTP_400_BAD_REQUEST)
 
         dispute.status = next_status
         dispute.resolution = resolution
         dispute.review_notes = review_notes.strip()
         dispute.handled_by = request.user
         dispute.reviewed_by = request.user
+        dispute.refund_status = refund_status
+        dispute.refund_amount = refund_amount
+        dispute.refund_reference = refund_reference.strip()
         dispute.resolved_at = (
             timezone.now()
+            if next_status in {Dispute.Status.RESOLVED, Dispute.Status.REJECTED, Dispute.Status.CLOSED}
+            else None
+        )
+        dispute.appeal_deadline = (
+            timezone.now() + timedelta(days=7)
             if next_status in {Dispute.Status.RESOLVED, Dispute.Status.REJECTED, Dispute.Status.CLOSED}
             else None
         )
@@ -223,7 +318,30 @@ class DisputeViewSet(
         dispute.save(update_fields=[
             "status", "resolution", "review_notes", "handled_by", "reviewed_by",
             "resolved_at", "case_history", "updated_at",
+            "appeal_deadline", "refund_status", "refund_amount", "refund_reference",
         ])
+
+        DisputeMessage.objects.create(
+            dispute=dispute,
+            author=request.user,
+            kind=DisputeMessage.Kind.DECISION,
+            body=resolution or f"Le statut du litige est maintenant : {dispute.get_status_display()}.",
+        )
+
+        if reporter_abuse:
+            AccountModerationAction.objects.create(
+                target_user=dispute.raised_by,
+                actor=request.user,
+                action=AccountModerationAction.Action.WARNING,
+                reason=f"Avertissement pour signalement abusif dans le litige {dispute.pk}: {resolution}",
+            )
+            notify_moderation_event(
+                dispute.raised_by,
+                "report_decision",
+                "Avertissement lié à un signalement abusif",
+                f"Après examen du litige {dispute.pk}, l’administration a jugé le signalement abusif. Motif : {resolution}",
+                "/notifications",
+            )
 
         message = resolution or f"Le statut du litige est maintenant : {dispute.get_status_display()}."
         recipients = {dispute.raised_by_id: dispute.raised_by, dispute.seller_id: dispute.seller}

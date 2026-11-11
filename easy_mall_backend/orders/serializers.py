@@ -15,6 +15,10 @@ from notifications.models import Notification
 from notifications.services import notify
 from payments.models import Payment
 from localization.models import PrivateAddress
+from promotions.models import LoyaltyTransaction
+from promotions.services import calculate_checkout_quote
+from negotiations.models import Negotiation, NegotiationEvent
+from negotiations.services import expire_if_stale
 
 from .models import CheckoutGroup, Order, OrderItem
 
@@ -45,12 +49,19 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "shipping_address",
             "product",
             "variant",
+            "negotiation",
             "variant_label",
             "product_title",
             "seller_username",
             "quantity",
             "unit_price",
+            "original_unit_price",
+            "promotion_discount",
+            "promotion_name",
+            "loyalty_discount",
+            "loyalty_points_redeemed",
             "shipping_cost",
+            "original_shipping_cost",
             "sale_method",
             "subtotal",
             "currency",
@@ -97,6 +108,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "status",
             "payment_method",
             "total_amount",
+            "loyalty_points_redeemed",
+            "loyalty_discount_amount",
             "currency",
             "shipping_address",
             "items",
@@ -111,7 +124,10 @@ class CheckoutGroupDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CheckoutGroup
-        fields = ["id", "currency", "total_amount", "orders", "items", "created_at"]
+        fields = [
+            "id", "currency", "total_amount", "loyalty_points_redeemed",
+            "loyalty_discount_amount", "orders", "items", "created_at",
+        ]
 
     def get_items(self, obj):
         items = OrderItem.objects.filter(order__checkout_group=obj).select_related(
@@ -130,8 +146,11 @@ class OrderCreateSerializer(serializers.Serializer):
     shipping_address = serializers.CharField(required=False, allow_blank=False)
     private_address_id = serializers.UUIDField(required=False, write_only=True)
     items = serializers.ListField(child=serializers.DictField(), allow_empty=False)
+    points_to_redeem = serializers.IntegerField(required=False, default=0, min_value=0)
 
     def validate(self, attrs):
+        if self.context.get("quote_only"):
+            return attrs
         address_id = attrs.pop("private_address_id", None)
         requires_delivery = any(
             entry["product"].sale_method == Product.SaleMethod.DELIVERY
@@ -168,15 +187,49 @@ class OrderCreateSerializer(serializers.Serializer):
             attrs["shipping_address"] = ""
         return attrs
 
+    def get_quote(self):
+        quote = calculate_checkout_quote(
+            self.validated_data["items"],
+            self.context["request"].user,
+            self.validated_data.get("points_to_redeem", 0),
+        )
+        return {
+            "currency": quote["currency"],
+            "points_balance": quote["points_balance"],
+            "points_redeemed": quote["points_redeemed"],
+            "loyalty_discount": quote["loyalty_discount"],
+            "total_before_loyalty": quote["total_before_loyalty"],
+            "total": quote["total"],
+            "items": [
+                {
+                    "product_id": str(item["product"].pk),
+                    "variant_id": str(item["variant"].pk) if item["variant"] else None,
+                    "negotiation_id": str(item["negotiation"].pk) if item.get("negotiation") else None,
+                    "product_title": item["product"].title,
+                    "quantity": item["quantity"],
+                    "original_unit_price": item["original_unit_price"],
+                    "unit_price": item["unit_price"],
+                    "promotion_discount": item["promotion_discount"],
+                    "promotion_name": item["promotion_name"],
+                    "original_shipping_cost": item["original_shipping_cost"],
+                    "shipping_cost": item["shipping_cost"],
+                    "loyalty_discount": item["loyalty_discount"],
+                }
+                for item in quote["items"]
+            ],
+        }
+
     def validate_items(self, value):
         requested_quantities = {}
         expected_prices = {}
         conversion_visitors = {}
         variant_ids = {}
+        negotiation_ids = {}
         for entry in value:
             try:
                 product_id = uuid.UUID(str(entry["product_id"]))
                 variant_id = uuid.UUID(str(entry["variant_id"])) if entry.get("variant_id") else None
+                negotiation_id = uuid.UUID(str(entry["negotiation_id"])) if entry.get("negotiation_id") else None
                 raw_quantity = entry.get("quantity", 1)
                 if isinstance(raw_quantity, bool):
                     raise ValueError
@@ -242,6 +295,11 @@ class OrderCreateSerializer(serializers.Serializer):
                 )
             conversion_visitors[line_key] = conversion_visitor_id
             variant_ids[line_key] = variant_id
+            if line_key in negotiation_ids and negotiation_ids[line_key] != negotiation_id:
+                raise serializers.ValidationError(
+                    "Une même ligne ne peut pas mélanger prix négocié et prix catalogue."
+                )
+            negotiation_ids[line_key] = negotiation_id
 
         requested_product_ids = {product_id for product_id, _variant_id in requested_quantities}
         products = {
@@ -268,10 +326,37 @@ class OrderCreateSerializer(serializers.Serializer):
                 pk__in=[variant_id for variant_id in variant_ids.values() if variant_id]
             )
         }
+        negotiations = {
+            negotiation.pk: negotiation
+            for negotiation in Negotiation.objects.filter(
+                pk__in=[negotiation_id for negotiation_id in negotiation_ids.values() if negotiation_id]
+            ).select_related("product", "variant")
+        }
         for line_key, quantity in requested_quantities.items():
             product_id, variant_id = line_key
             product = products[product_id]
             variant = variants.get(variant_id)
+            negotiation_id = negotiation_ids.get(line_key)
+            negotiation = negotiations.get(negotiation_id)
+            if negotiation_id and negotiation is None:
+                raise serializers.ValidationError("La négociation est introuvable.")
+            if negotiation:
+                expire_if_stale(negotiation)
+                if (
+                    negotiation.status != Negotiation.Status.ACCEPTED
+                    or negotiation.buyer_id != self.context["request"].user.pk
+                    or negotiation.product_id != product.pk
+                    or negotiation.variant_id != (variant.pk if variant else None)
+                    or negotiation.reserved_until is None
+                    or negotiation.reserved_until <= timezone.now()
+                ):
+                    raise serializers.ValidationError(
+                        "Cette offre n'est pas acceptée, ne vous appartient pas ou sa réservation a expiré."
+                    )
+                if quantity != 1:
+                    raise serializers.ValidationError(
+                        "Une négociation acceptée réserve une unité par commande."
+                    )
             if product.variants.exists() and variant is None:
                 raise serializers.ValidationError(
                     f"Choisissez une variante pour « {product.title} »."
@@ -280,7 +365,10 @@ class OrderCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError("Cette variante n'appartient pas à cet article.")
             expected_unit_price, expected_shipping_cost = expected_prices[line_key]
             if (
-                expected_unit_price is not None and expected_unit_price != product.price
+                expected_unit_price is not None
+                and expected_unit_price != (
+                    negotiation.accepted_price if negotiation else product.price
+                )
             ) or (
                 expected_shipping_cost is not None
                 and expected_shipping_cost != product.shipping_cost
@@ -298,6 +386,15 @@ class OrderCreateSerializer(serializers.Serializer):
                     f"« {product.title} » n'est plus disponible."
                 )
             available_stock = variant.stock_quantity if variant else product.stock_quantity
+            reserved_offers = Negotiation.objects.filter(
+                status=Negotiation.Status.ACCEPTED,
+                reserved_until__gt=timezone.now(),
+                product=product,
+                variant=variant if variant else None,
+            )
+            if negotiation:
+                reserved_offers = reserved_offers.exclude(pk=negotiation.pk)
+            available_stock -= reserved_offers.count()
             if available_stock < quantity:
                 raise serializers.ValidationError(
                     f"Stock insuffisant pour « {product.title} » "
@@ -312,6 +409,8 @@ class OrderCreateSerializer(serializers.Serializer):
                     "expected_shipping_cost": expected_shipping_cost,
                     "conversion_visitor_id": conversion_visitors.get(line_key),
                     "variant": variant,
+                    "negotiation": negotiation,
+                    "negotiated_unit_price": negotiation.accepted_price if negotiation else None,
                 }
             )
         return cleaned
@@ -319,6 +418,7 @@ class OrderCreateSerializer(serializers.Serializer):
     @transaction.atomic
     def save(self):
         buyer = self.context["request"].user
+        buyer = type(buyer).objects.select_for_update().get(pk=buyer.pk)
         requested_items = self.validated_data["items"]
         requested_quantities = {
             (entry["product"].pk, entry["variant"].pk if entry["variant"] else None): entry["quantity"]
@@ -332,6 +432,12 @@ class OrderCreateSerializer(serializers.Serializer):
             (entry["product"].pk, entry["variant"].pk if entry["variant"] else None): (
                 entry["expected_unit_price"],
                 entry["expected_shipping_cost"],
+            )
+            for entry in requested_items
+        }
+        negotiation_ids = {
+            (entry["product"].pk, entry["variant"].pk if entry["variant"] else None): (
+                entry["negotiation"].pk if entry.get("negotiation") else None
             )
             for entry in requested_items
         }
@@ -357,14 +463,31 @@ class OrderCreateSerializer(serializers.Serializer):
         if locked_variants.keys() != requested_variant_ids:
             raise serializers.ValidationError("Une variante du panier n'est plus disponible.")
 
+        requested_negotiation_ids = {
+            negotiation_id for negotiation_id in negotiation_ids.values() if negotiation_id
+        }
+        locked_negotiations = {
+            negotiation.pk: negotiation
+            for negotiation in Negotiation.objects.select_for_update()
+            .filter(pk__in=requested_negotiation_ids)
+            .order_by("pk")
+        }
+        if locked_negotiations.keys() != requested_negotiation_ids:
+            raise serializers.ValidationError("Une réservation de négociation n'est plus disponible.")
+
         items_data = []
         for line_key, quantity in requested_quantities.items():
             product_id, variant_id = line_key
             product = locked_products[product_id]
             variant = locked_variants.get(variant_id)
+            negotiation_id = negotiation_ids.get(line_key)
+            negotiation = locked_negotiations.get(negotiation_id)
             expected_unit_price, expected_shipping_cost = expected_prices[line_key]
             if (
-                expected_unit_price is not None and expected_unit_price != product.price
+                expected_unit_price is not None
+                and expected_unit_price != (
+                    negotiation.accepted_price if negotiation else product.price
+                )
             ) or (
                 expected_shipping_cost is not None
                 and expected_shipping_cost != product.shipping_cost
@@ -377,7 +500,29 @@ class OrderCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     f"« {product.title} » n'est plus disponible."
                 )
+            if negotiation:
+                if (
+                    negotiation.status != Negotiation.Status.ACCEPTED
+                    or negotiation.buyer_id != buyer.pk
+                    or negotiation.product_id != product.pk
+                    or negotiation.variant_id != (variant.pk if variant else None)
+                    or negotiation.reserved_until is None
+                    or negotiation.reserved_until <= timezone.now()
+                    or quantity != 1
+                ):
+                    raise serializers.ValidationError(
+                        "La réservation de cette offre a expiré ou n'est plus valide."
+                    )
             available_stock = variant.stock_quantity if variant else product.stock_quantity
+            reservations = Negotiation.objects.filter(
+                product=product,
+                variant=variant if variant else None,
+                status=Negotiation.Status.ACCEPTED,
+                reserved_until__gt=timezone.now(),
+            )
+            if negotiation:
+                reservations = reservations.exclude(pk=negotiation.pk)
+            available_stock -= reservations.count()
             if available_stock < quantity:
                 raise serializers.ValidationError(
                     f"Stock insuffisant pour « {product.title} » "
@@ -389,6 +534,8 @@ class OrderCreateSerializer(serializers.Serializer):
                     "quantity": quantity,
                     "conversion_visitor_id": conversion_visitors[line_key],
                     "variant": variant,
+                    "negotiation": negotiation,
+                    "negotiated_unit_price": negotiation.accepted_price if negotiation else None,
                 }
             )
 
@@ -397,10 +544,32 @@ class OrderCreateSerializer(serializers.Serializer):
                 "Tous les articles d'une commande doivent utiliser la même devise."
             )
 
+        quote = calculate_checkout_quote(
+            items_data,
+            buyer,
+            self.validated_data.get("points_to_redeem", 0),
+        )
+        quote_by_line = {
+            (
+                entry["product"].pk,
+                entry["variant"].pk if entry["variant"] else None,
+            ): entry
+            for entry in quote["items"]
+        }
+
         group = CheckoutGroup.objects.create(
             buyer=buyer,
             currency=items_data[0]["product"].currency,
+            loyalty_points_redeemed=quote["points_redeemed"],
+            loyalty_discount_amount=quote["loyalty_discount"],
         )
+        if quote["points_redeemed"]:
+            LoyaltyTransaction.objects.create(
+                user=buyer,
+                checkout_group=group,
+                kind=LoyaltyTransaction.Kind.REDEEMED,
+                points_delta=-quote["points_redeemed"],
+            )
         for entry in items_data:
             product = entry["product"]
             if product.item_type == Product.ItemType.SERVICE:
@@ -450,32 +619,67 @@ class OrderCreateSerializer(serializers.Serializer):
                     else None
                 ),
                 currency=group.currency,
+                loyalty_points_redeemed=sum(
+                    quote_by_line[(entry["product"].pk, entry["variant"].pk if entry["variant"] else None)]["loyalty_points_redeemed"]
+                    for entry in seller_entries
+                ),
+                loyalty_discount_amount=sum(
+                    (quote_by_line[(entry["product"].pk, entry["variant"].pk if entry["variant"] else None)]["loyalty_discount"] for entry in seller_entries),
+                    Decimal("0.00"),
+                ),
                 payment_method=(
                     Order.PaymentMethod.MOBILE_MONEY
                     if settings.PAYMENTS_MODE == "online"
                     else Order.PaymentMethod.CASH
                 ),
             )
-            OrderItem.objects.bulk_create([
-                OrderItem(
+            order_items = []
+            for entry in seller_entries:
+                quote_item = quote_by_line[(
+                    entry["product"].pk,
+                    entry["variant"].pk if entry["variant"] else None,
+                )]
+                order_items.append(OrderItem(
                     order=order,
                     product=entry["product"],
+                    negotiation=entry["negotiation"],
                     seller=entry["product"].seller,
                     product_title=entry["product"].title,
                     variant=entry["variant"],
                     variant_label=entry["variant"].label if entry["variant"] else "",
                     quantity=entry["quantity"],
                     conversion_visitor_id=entry["conversion_visitor_id"],
-                    unit_price=entry["product"].price,
+                    unit_price=quote_item["unit_price"],
+                    original_unit_price=quote_item["original_unit_price"],
+                    promotion_discount=quote_item["promotion_discount"],
+                    promotion_name=quote_item["promotion_name"],
+                    loyalty_discount=quote_item["loyalty_discount"],
+                    loyalty_points_redeemed=quote_item["loyalty_points_redeemed"],
                     shipping_cost=(
+                        quote_item["shipping_cost"]
+                        if entry["product"].sale_method == Product.SaleMethod.DELIVERY
+                        else 0
+                    ),
+                    original_shipping_cost=(
                         entry["product"].shipping_cost
                         if entry["product"].sale_method == Product.SaleMethod.DELIVERY
                         else 0
                     ),
                     sale_method=entry["product"].sale_method,
+                ))
+            OrderItem.objects.bulk_create(order_items)
+            for entry in seller_entries:
+                negotiation = entry["negotiation"]
+                if negotiation is None:
+                    continue
+                negotiation.status = Negotiation.Status.COMPLETED
+                negotiation.save(update_fields=["status", "updated_at"])
+                NegotiationEvent.objects.create(
+                    negotiation=negotiation,
+                    actor=buyer,
+                    kind=NegotiationEvent.Kind.CHECKOUT,
+                    amount=negotiation.accepted_price,
                 )
-                for entry in seller_entries
-            ])
             movements = []
             for entry in seller_entries:
                 if entry["product"].item_type == Product.ItemType.SERVICE:
@@ -595,6 +799,17 @@ class OrderCancelSerializer(serializers.Serializer):
         order.payments.filter(status=Payment.Status.PENDING).update(
             status=Payment.Status.FAILED
         )
+        points_to_restore = sum(item.loyalty_points_redeemed for item in order_items)
+        if points_to_restore:
+            LoyaltyTransaction.objects.get_or_create(
+                user=order.buyer,
+                order=order,
+                kind=LoyaltyTransaction.Kind.REFUNDED,
+                defaults={
+                    "checkout_group": order.checkout_group,
+                    "points_delta": points_to_restore,
+                },
+            )
         order.status = Order.Status.CANCELLED
         order.save(update_fields=["status"])
         return order

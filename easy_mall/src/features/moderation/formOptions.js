@@ -11,10 +11,9 @@ export const PRODUCT_REPORT_REASONS = [
 
 export const DISPUTE_REASONS = [
   ["not_received", "Article non reçu"],
-  ["not_as_described", "Article différent de la description"],
-  ["damaged_item", "Article endommagé"],
-  ["delivery_issue", "Problème de livraison ou de remise"],
-  ["seller_unresponsive", "Vendeur injoignable"],
-  ["payment_issue", "Problème de paiement"],
-  ["other", "Autre motif"],
+  ["damaged_item", "Produit endommagé"],
+  ["not_as_described", "Produit différent de la description"],
+  ["counterfeit_suspected", "Produit contrefait ou suspect"],
+  ["seller_fraud", "Vendeur frauduleux"],
+  ["other", "Autre problème lié à la transaction"],
 ];

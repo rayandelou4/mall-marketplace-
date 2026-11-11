@@ -42,8 +42,8 @@ export default function CartPage() {
           <>
             <div className="flex flex-col gap-8">
               {Object.entries(itemsByCurrency).map(([currency, currencyItems]) => {
-                const total = currencyItems.reduce((sum, { product, quantity }) => (
-                  sum + Number(product.price) * quantity
+                const total = currencyItems.reduce((sum, { product, quantity, negotiation }) => (
+                  sum + Number(negotiation?.accepted_price ?? product.price) * quantity
                     + (product.sale_method === "pickup" ? 0 : Number(product.shipping_cost || 0))
                 ), 0);
                 const hasUnavailableStock = currencyItems.some(({ product, variant, quantity }) => {
@@ -58,8 +58,8 @@ export default function CartPage() {
                   <section key={currency} aria-labelledby={`cart-${currency}`}>
                     <h2 id={`cart-${currency}`} className="mb-3 text-lg font-semibold">Panier {currency}</h2>
                     <div className="flex flex-col gap-4">
-                      {currencyItems.map(({ product, variant, quantity }) => (
-                        <div key={`${product.id}:${variant?.id || ""}`} className={cx("flex flex-wrap items-center gap-3 rounded-2xl border p-3 sm:flex-nowrap sm:gap-4 sm:p-4", t.cardBorder, t.cardBg)}>
+                      {currencyItems.map(({ product, variant, quantity, negotiation }) => (
+                        <div key={`${product.id}:${variant?.id || ""}:${negotiation?.id || ""}`} className={cx("flex flex-wrap items-center gap-3 rounded-2xl border p-3 sm:flex-nowrap sm:gap-4 sm:p-4", t.cardBorder, t.cardBg)}>
                           <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl">
                             {product.primary_image ? (
                               <img src={product.primary_image} alt={product.title} className="h-full w-full object-cover" />
@@ -73,7 +73,8 @@ export default function CartPage() {
                             <Link to={`/produit/${product.id}`} className={cx("text-sm font-medium hover:underline", t.textPrimary)}>
                               {product.title}
                             </Link>
-                            <p className="font-mono text-sm text-indigo-600">{formatPrice(Number(product.price) * quantity, currency)} · {quantity}</p>
+                            <p className="font-mono text-sm text-indigo-600">{formatPrice(Number(negotiation?.accepted_price ?? product.price) * quantity, currency)} · {quantity}</p>
+                            {negotiation && <p className="text-xs font-medium text-emerald-700">Prix accepté · réservation jusqu’au {new Date(negotiation.reserved_until).toLocaleTimeString("fr", { hour: "2-digit", minute: "2-digit" })}</p>}
                             {variant && <p className={cx("text-xs", t.textMuted)}>{variant.label} · {Object.entries(variant.attributes || {}).map(([name, value]) => `${name}: ${value}`).join(" · ")}</p>}
                             {product.variants?.length > 0 && !variant && <p className="text-xs font-medium text-rose-600">Choisissez une variante depuis la fiche produit.</p>}
                             <p className={cx("text-xs", t.textMuted)}>
@@ -83,15 +84,15 @@ export default function CartPage() {
                           </div>
                           <div className="ml-auto flex items-center gap-3">
                             <div className={cx("flex items-center gap-2 rounded-full border px-2 py-1", t.border)}>
-                              <button type="button" onClick={() => updateQuantity(product.id, quantity - 1, variant?.id)} aria-label="Diminuer la quantité">
+                              <button type="button" onClick={() => updateQuantity(product.id, quantity - 1, variant?.id, negotiation?.id)} aria-label="Diminuer la quantité">
                                 <Minus className="h-3.5 w-3.5" />
                               </button>
                               <span className="w-5 text-center text-sm">{quantity}</span>
-                              <button type="button" onClick={() => updateQuantity(product.id, quantity + 1, variant?.id)} disabled={(variant?.stock_quantity ?? product.stock_quantity) != null && quantity >= Number(variant?.stock_quantity ?? product.stock_quantity)} aria-label="Augmenter la quantité" className="disabled:cursor-not-allowed disabled:opacity-40">
+                              <button type="button" onClick={() => updateQuantity(product.id, quantity + 1, variant?.id, negotiation?.id)} disabled={Boolean(negotiation) || ((variant?.stock_quantity ?? product.stock_quantity) != null && quantity >= Number(variant?.stock_quantity ?? product.stock_quantity))} aria-label="Augmenter la quantité" className="disabled:cursor-not-allowed disabled:opacity-40">
                                 <Plus className="h-3.5 w-3.5" />
                               </button>
                             </div>
-                            <button type="button" onClick={() => removeItem(product.id, variant?.id)} aria-label="Retirer du panier" className="text-rose-500 hover:text-rose-600">
+                            <button type="button" onClick={() => removeItem(product.id, variant?.id, negotiation?.id)} aria-label="Retirer du panier" className="text-rose-500 hover:text-rose-600">
                               <Trash2 className="h-4 w-4" />
                             </button>
                           </div>
