@@ -2,6 +2,7 @@
 Serializers de l'app `moderation`.
 """
 
+from django.core.validators import URLValidator
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
@@ -160,7 +161,9 @@ class DisputeCreateSerializer(serializers.Serializer):
     reason = serializers.ChoiceField(choices=Dispute.Reason.choices)
     description = serializers.CharField(max_length=4000, trim_whitespace=True)
     evidence_urls = serializers.ListField(
-        child=serializers.URLField(schemes=["https"]), required=False, max_length=5
+        child=serializers.URLField(validators=[URLValidator(schemes=["https"])]),
+        required=False,
+        max_length=5,
     )
 
     def validate_order_id(self, value):
@@ -214,7 +217,9 @@ class DisputeCreateSerializer(serializers.Serializer):
 class DisputeMessageCreateSerializer(serializers.Serializer):
     body = serializers.CharField(max_length=4000, trim_whitespace=True)
     evidence_urls = serializers.ListField(
-        child=serializers.URLField(schemes=["https"]), required=False, max_length=5
+        child=serializers.URLField(validators=[URLValidator(schemes=["https"])]),
+        required=False,
+        max_length=5,
     )
 
 

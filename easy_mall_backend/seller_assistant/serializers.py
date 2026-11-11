@@ -1,3 +1,4 @@
+from django.core.validators import URLValidator
 from rest_framework import serializers
 
 from catalog.models import Category
@@ -5,7 +6,9 @@ from catalog.models import Category
 
 class ListingSuggestionRequestSerializer(serializers.Serializer):
     image_urls = serializers.ListField(
-        child=serializers.URLField(schemes=["https"]), min_length=1, max_length=3
+        child=serializers.URLField(validators=[URLValidator(schemes=["https"])]),
+        min_length=1,
+        max_length=3,
     )
     title = serializers.CharField(required=False, allow_blank=True, max_length=150)
     description = serializers.CharField(required=False, allow_blank=True)
