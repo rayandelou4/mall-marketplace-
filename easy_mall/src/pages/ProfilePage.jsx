@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { MapPin, Star, Package, ShoppingBag, Settings, Heart, MessageCircle, Facebook, CalendarDays, Share2 } from "lucide-react";
+import { MapPin, Star, Package, ShoppingBag, Settings, Heart, MessageCircle, CalendarDays, Share2 } from "lucide-react";
+import { FaFacebook } from "react-icons/fa";
 import { Link } from "react-router-dom";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
@@ -210,7 +211,7 @@ export default function ProfilePage() {
                   <MessageCircle className="h-4 w-4" />
                 </a>
                 <a href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shopUrl)}`} target="_blank" rel="noreferrer" aria-label="Partager la boutique sur Facebook" title="Facebook" className={cx("rounded-full border p-2", t.border, t.textPrimary)}>
-                  <Facebook className="h-4 w-4" />
+                  <FaFacebook className="h-4 w-4" />
                 </a>
               </div>
             </div>

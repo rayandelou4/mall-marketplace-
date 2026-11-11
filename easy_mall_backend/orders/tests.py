@@ -272,6 +272,8 @@ class OrderCheckoutTests(TestCase):
         self.assertEqual(response_data["shipping_address"], snapshot)
         seller_sale_data = OrderItemSerializer(order.items.get()).data
         self.assertEqual(seller_sale_data["shipping_address"], snapshot)
+        self.assertEqual(seller_sale_data["buyer_name"], self.buyer.username)
+        self.assertEqual(seller_sale_data["buyer_username"], self.buyer.username)
 
     def test_checkout_rejects_another_users_saved_address(self):
         country = Country.objects.create(code="CD", name="RDC")
@@ -442,6 +444,34 @@ class OrderCheckoutTests(TestCase):
         self.assertEqual(self.buyer.total_purchases, 1)
         self.assertEqual(self.seller.total_sales, 1)
         self.assertEqual(second_seller.total_sales, 1)
+
+    def test_seller_cannot_cancel_or_hide_active_sale_before_or_after_shipping(self):
+        order = self.create_order(
+            [{"product_id": str(self.product.pk), "quantity": 1}]
+        )
+        item = order.items.get()
+        client = APIClient()
+        client.force_authenticate(user=self.seller)
+
+        cancel_url = f"/api/v1/orders/orders/{order.pk}/cancel/"
+        sale_url = f"/api/v1/orders/my-sales/{item.pk}/"
+        self.assertEqual(client.post(cancel_url, {}, format="json").status_code, 404)
+        self.assertEqual(client.delete(sale_url).status_code, 400)
+
+        shipped_response = client.post(
+            f"{sale_url}mark_shipped/", {}, format="json"
+        )
+        self.assertEqual(shipped_response.status_code, 200, shipped_response.content)
+        self.assertEqual(client.post(cancel_url, {}, format="json").status_code, 404)
+        self.assertEqual(client.delete(sale_url).status_code, 400)
+
+        client.force_authenticate(user=self.buyer)
+        receipt_response = client.post(
+            f"/api/v1/orders/orders/{order.pk}/confirm_receipt/", {}, format="json"
+        )
+        self.assertEqual(receipt_response.status_code, 200, receipt_response.content)
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.DELIVERED)
 
     def test_delivery_needs_each_seller_line_shipped_before_buyer_confirmation(self):
         second_product = Product.objects.create(

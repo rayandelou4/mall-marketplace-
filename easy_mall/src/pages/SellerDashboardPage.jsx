@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { Plus, Pencil, Trash2, Eye, Heart, Package, TrendingUp, MapPin, ShoppingBag, Star } from "lucide-react";
+import { Plus, Pencil, Trash2, Eye, Heart, Package, TrendingUp, MapPin, ShoppingBag, Star, MessageCircle } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
 import { SiteFooter } from "../components/layout/SiteFooter";
 import { SectionHeading, LoadingBlock, ErrorBlock } from "../components/ui/StatusBlocks";
@@ -14,6 +14,7 @@ import { fetchSellerStats } from "../features/analytics/api";
 import { VerificationPanel } from "../components/seller/VerificationPanel";
 import { SellerLocalizationPanel } from "../components/seller/SellerLocalizationPanel";
 import { SellerPromotionsPanel } from "../components/seller/SellerPromotionsPanel";
+import { startConversation } from "../features/messaging/api";
 
 const STATUS_LABELS = { draft: "Brouillon", published: "Publié", sold: "Vendu", archived: "Archivé" };
 const MODERATION_LABELS = { pending: "En attente de validation", approved: "Visible", rejected: "Refusée" };
@@ -145,6 +146,22 @@ export default function SellerDashboardPage() {
     try {
       await markSaleShipped(item.id);
       loadSales();
+    } catch (error) {
+      window.alert(error.message);
+    } finally {
+      setBusySaleId(null);
+    }
+  }
+
+  async function handleContactBuyer(item) {
+    setBusySaleId(item.id);
+    try {
+      const conversation = await startConversation({
+        recipientUsername: item.buyer_username,
+        productId: item.product,
+        content: `Bonjour, je vous contacte au sujet de votre achat : ${item.product_title}.`,
+      });
+      navigate(`/messages/${conversation.id}`);
     } catch (error) {
       window.alert(error.message);
     } finally {
@@ -486,6 +503,7 @@ export default function SellerDashboardPage() {
                 <div key={item.id} className={cx("flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-4 text-sm", t.cardBorder, t.cardBg)}>
                   <div className="min-w-35 flex-1">
                     <p className={cx("font-medium", t.textPrimary)}>{item.product_title}{item.variant_label ? ` · ${item.variant_label}` : ""} × {item.quantity}</p>
+                    <p className={cx("mt-1 text-xs", t.textMuted)}>Acheteur : {item.buyer_name}</p>
                     {item.shipping_address && (
                       <p className={cx("mt-1 flex items-start gap-1 text-xs", t.textMuted)}>
                         <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -496,9 +514,23 @@ export default function SellerDashboardPage() {
                   <span className={cx("text-xs", t.textMuted)}>
                     {item.order_status === "pending" && item.payment_method === "cash"
                       ? item.sale_method === "delivery" ? "En attente d’expédition" : "En attente de remise"
-                      : item.order_status}
+                      : item.order_status === "shipped"
+                        ? "Expédiée · en attente de confirmation de l’acheteur"
+                        : item.order_status === "delivered"
+                          ? "Réception confirmée par l’acheteur"
+                          : item.order_status}
                   </span>
                   <span className="font-mono">{formatPrice(item.subtotal, item.currency)}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleContactBuyer(item)}
+                    disabled={busySaleId === item.id}
+                    aria-label={`Contacter ${item.buyer_name}`}
+                    className={cx("inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-semibold disabled:opacity-60", t.border, t.textPrimary)}
+                  >
+                    <MessageCircle className="h-3.5 w-3.5" />
+                    Contacter l’acheteur
+                  </button>
                   {item.order_status === "pending" && item.payment_method === "cash" && item.sale_method === "delivery" && !item.is_shipped && (
                     <button
                       type="button"

@@ -31,12 +31,9 @@ class Category(models.Model):
     )
     icon_url = models.URLField(blank=True, null=True)
     order = models.PositiveIntegerField(default=0)
-    is_active = models.BooleanField(default=True)
 
     class Meta:
         db_table = "categories"
-        verbose_name = _("catégorie")
-        verbose_name_plural = _("catégories")
         ordering = ["order", "name"]
 
     def __str__(self):
@@ -339,7 +336,14 @@ class ProductActivity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        indexes = [models.Index(fields=["product", "activity_type", "created_at"], name="product_activity_lookup_idx")]
+        db_table = "product_activities"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["product", "activity_type", "created_at"],
+                name="product_activity_lookup_idx",
+            )
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["product", "activity_type", "visitor_id"],
@@ -347,18 +351,6 @@ class ProductActivity(models.Model):
                 name="unique_product_viewer",
             )
         ]
-
-    class Meta:
-        db_table = "product_activities"
-        ordering = ["-created_at"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["product", "activity_type", "visitor_id"],
-                condition=models.Q(activity_type="view"),
-                name="unique_product_visitor_view",
-            )
-        ]
-        indexes = [models.Index(fields=["product", "activity_type"])]
 
 
 class ProductImage(models.Model):

@@ -175,7 +175,7 @@ class SellerSalesViewSet(
         return OrderItem.objects.filter(
             seller=self.request.user, hidden_by_seller=False
         ).select_related(
-            "order", "product"
+            "order", "order__buyer", "product"
         )
 
     def destroy(self, request, *args, **kwargs):

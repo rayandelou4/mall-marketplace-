@@ -25,6 +25,8 @@ from .models import CheckoutGroup, Order, OrderItem
 
 class OrderItemSerializer(serializers.ModelSerializer):
     seller_username = serializers.CharField(source="seller.username", read_only=True)
+    buyer_name = serializers.SerializerMethodField()
+    buyer_username = serializers.CharField(source="order.buyer.username", read_only=True)
     subtotal = serializers.ReadOnlyField()
     # La devise vit sur la commande parente, pas sur la ligne elle-même.
     currency = serializers.CharField(source="order.currency", read_only=True)
@@ -53,6 +55,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "variant_label",
             "product_title",
             "seller_username",
+            "buyer_name",
+            "buyer_username",
             "quantity",
             "unit_price",
             "original_unit_price",
@@ -68,6 +72,10 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "payment_method",
             "is_shipped",
         ]
+
+    def get_buyer_name(self, obj):
+        buyer = obj.order.buyer
+        return f"{buyer.first_name} {buyer.last_name}".strip() or buyer.username
 
 
 class OrderListSerializer(serializers.ModelSerializer):
