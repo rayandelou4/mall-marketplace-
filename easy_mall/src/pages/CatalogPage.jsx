@@ -73,6 +73,9 @@ export default function CatalogPage() {
   const [visualSearchLoading, setVisualSearchLoading] = useState(false);
   const [visualSearchError, setVisualSearchError] = useState(null);
   const flatCategories = useMemo(() => flattenCategories(categories), [categories]);
+  const availableCategories = filters.item_type
+    ? flatCategories.filter((category) => category.category_type === filters.item_type)
+    : flatCategories;
 
   const filterError = useMemo(() => {
     const hasMinimum = filters.price_min !== "";
@@ -145,6 +148,14 @@ export default function CatalogPage() {
 
   function updateFilter(key, value) {
     writeFilters(searchParams, setSearchParams, { [key]: value });
+  }
+
+  function updateItemType(value) {
+    const currentCategory = flatCategories.find((category) => category.id === filters.category);
+    writeFilters(searchParams, setSearchParams, {
+      item_type: value,
+      category: value && currentCategory?.category_type !== value ? "" : filters.category,
+    });
   }
 
   function applySearch(event) {
@@ -338,14 +349,14 @@ export default function CatalogPage() {
         )}
 
         <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          <select value={filters.item_type} onChange={(e) => updateFilter("item_type", e.target.value)} className={inputClass}>
+          <select value={filters.item_type} onChange={(e) => updateItemType(e.target.value)} className={inputClass}>
             <option value="">Produits et services</option>
             <option value="product">Produits</option>
             <option value="service">Services</option>
           </select>
           <select value={filters.category} onChange={(e) => updateFilter("category", e.target.value)} className={inputClass}>
             <option value="">Toutes catégories</option>
-            {flatCategories.map((c) => (
+            {availableCategories.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>

@@ -23,40 +23,60 @@ export default function ProfilePage() {
   const { user, isAuthenticated } = useAuth();
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [shareNotice, setShareNotice] = useState("");
-  const [state, setState] = useState({ loading: true, error: null, profile: null, products: [], reviews: [], sellerFavorite: null, favoriteSaving: false });
+  const [state, setState] = useState({ loading: true, error: null, productsError: null, reviewsError: null, favoriteError: null, profile: null, products: [], reviews: [], sellerFavorite: null, favoriteSaving: false });
 
   useEffect(() => {
     let cancelled = false;
-    setState((s) => ({ ...s, loading: true, error: null }));
-    const sellerFavoritesRequest = isAuthenticated
+    setState((s) => ({ ...s, loading: true, error: null, productsError: null, reviewsError: null, favoriteError: null }));
+    const showSellerActions = isAuthenticated && user?.username !== username;
+    const sellerFavoritesRequest = showSellerActions
       ? fetchSellerFavorites()
       : Promise.resolve([]);
-    Promise.all([
+    Promise.allSettled([
       fetchPublicProfile(username),
       fetchProducts({ seller: username }),
       fetchReviews({ user: username }),
       sellerFavoritesRequest,
     ])
-      .then(([profile, products, reviews, sellerFavorites]) => {
-        if (!cancelled) {
-          setState({
+      .then(([profileResult, productsResult, reviewsResult, favoritesResult]) => {
+        if (cancelled) return;
+        if (profileResult.status === "rejected") {
+          setState((current) => ({
+            ...current,
             loading: false,
-            error: null,
-            profile,
-            products,
-            reviews,
-            sellerFavorite: sellerFavorites.find((favorite) => favorite.seller_username === username) || null,
-            favoriteSaving: false,
-          });
+            error: profileResult.reason?.message || "Impossible de charger ce profil.",
+            profile: null,
+          }));
+          return;
         }
-      })
-      .catch((err) => {
-        if (!cancelled) setState({ loading: false, error: err.message, profile: null, products: [], reviews: [], sellerFavorite: null, favoriteSaving: false });
+
+        const products = productsResult.status === "fulfilled" && Array.isArray(productsResult.value)
+          ? productsResult.value
+          : [];
+        const reviews = reviewsResult.status === "fulfilled" && Array.isArray(reviewsResult.value)
+          ? reviewsResult.value
+          : [];
+        const sellerFavorites = favoritesResult.status === "fulfilled" && Array.isArray(favoritesResult.value)
+          ? favoritesResult.value
+          : [];
+
+        setState({
+          loading: false,
+          error: null,
+          productsError: productsResult.status === "rejected" ? productsResult.reason?.message || "Impossible de charger les annonces." : null,
+          reviewsError: reviewsResult.status === "rejected" ? reviewsResult.reason?.message || "Impossible de charger les avis." : null,
+          favoriteError: favoritesResult.status === "rejected" ? favoritesResult.reason?.message || "Le suivi des vendeurs est indisponible." : null,
+          profile: profileResult.value,
+          products,
+          reviews,
+          sellerFavorite: sellerFavorites.find((favorite) => favorite.seller_username === username) || null,
+          favoriteSaving: false,
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [username, isAuthenticated]);
+  }, [username, isAuthenticated, user?.username]);
 
   async function handleToggleSellerFavorite() {
     if (!isAuthenticated) {
@@ -191,7 +211,8 @@ export default function ProfilePage() {
                   <button
                     type="button"
                     onClick={handleToggleSellerFavorite}
-                    disabled={state.favoriteSaving}
+                    disabled={state.favoriteSaving || Boolean(state.favoriteError)}
+                    title={state.favoriteError || undefined}
                     className={cx(
                       "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold disabled:opacity-60",
                       t.border,
@@ -215,6 +236,11 @@ export default function ProfilePage() {
                 </a>
               </div>
             </div>
+            {state.favoriteError && user?.username !== profile.username && (
+              <p role="status" className={cx("mt-2 text-xs", t.textMuted)}>
+                Le suivi des vendeurs est temporairement indisponible.
+              </p>
+            )}
 
             <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
               <StatCard icon={Star} label="Note moyenne" value={Number(profile.average_rating || 0).toFixed(1)} t={t} />
@@ -246,7 +272,11 @@ export default function ProfilePage() {
                   ))}
                 </div>
               )}
-              {visibleProducts.length === 0 ? (
+              {state.productsError ? (
+                <p role="status" className={cx("text-sm", t.textMuted)}>
+                  Les annonces n’ont pas pu être chargées : {state.productsError}
+                </p>
+              ) : visibleProducts.length === 0 ? (
                 <p className={cx("text-sm", t.textMuted)}>Aucune annonce publiée pour l'instant.</p>
               ) : (
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -259,7 +289,11 @@ export default function ProfilePage() {
 
             <div className="mt-10">
               <SectionHeading title={`Avis reçus (${reviews.length})`} t={t} />
-              {reviews.length === 0 ? (
+              {state.reviewsError ? (
+                <p role="status" className={cx("text-sm", t.textMuted)}>
+                  Les avis n’ont pas pu être chargés : {state.reviewsError}
+                </p>
+              ) : reviews.length === 0 ? (
                 <p className={cx("text-sm", t.textMuted)}>Aucun avis reçu pour l'instant.</p>
               ) : (
                 <div className="flex flex-col gap-3">

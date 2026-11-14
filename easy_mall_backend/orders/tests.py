@@ -240,6 +240,15 @@ class OrderCheckoutTests(TestCase):
         self.assertEqual(
             order.items.get(product=delivery_product).shipping_cost, 6
         )
+        pickup_item = order.items.get(product=self.product)
+        delivery_item = order.items.get(product=delivery_product)
+        pickup_data = OrderItemSerializer(pickup_item).data
+        delivery_data = OrderItemSerializer(delivery_item).data
+        self.assertEqual(pickup_data["order_number"], str(order.pk))
+        self.assertEqual(pickup_data["merchandise_amount"], "10.00")
+        self.assertEqual(pickup_data["shipping_cost"], "0.00")
+        self.assertEqual(delivery_data["merchandise_amount"], "20.00")
+        self.assertEqual(delivery_data["shipping_cost"], "6.00")
 
     def test_checkout_uses_only_buyers_saved_address_and_keeps_snapshot(self):
         country = Country.objects.create(code="CD", name="RDC")

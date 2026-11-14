@@ -53,10 +53,21 @@ class CategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Category
-        fields = ["id", "name", "slug", "parent", "icon_url", "order", "children"]
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "category_type",
+            "parent",
+            "icon_url",
+            "order",
+            "children",
+        ]
 
     def get_children(self, obj):
-        return CategorySerializer(obj.children.filter(is_active=True), many=True).data
+        return CategorySerializer(
+            obj.children.filter(is_active=True, category_type=obj.category_type), many=True
+        ).data
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
@@ -341,6 +352,11 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
         item_type = attrs.get(
             "item_type", getattr(self.instance, "item_type", Product.ItemType.PRODUCT)
         )
+        category = attrs.get("category", getattr(self.instance, "category", None))
+        if category and category.category_type != item_type:
+            raise serializers.ValidationError(
+                {"category": "Choisissez une catégorie correspondant au type de l'annonce."}
+            )
         if variants is not None:
             if item_type != Product.ItemType.PRODUCT:
                 raise serializers.ValidationError({"variants": "Les services ne prennent pas en charge les variantes de stock."})

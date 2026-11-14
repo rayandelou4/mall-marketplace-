@@ -60,6 +60,31 @@ class ProductVisibilityTests(APITestCase):
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["id"], str(product.id))
 
+    def test_listing_category_type_must_match_item_type(self):
+        service_category = Category.objects.create(
+            name="Services",
+            category_type=Category.CategoryType.SERVICE,
+        )
+        payload = self.product_payload(Product.Status.DRAFT)
+        payload.update(
+            item_type=Product.ItemType.SERVICE,
+            category=str(self.category.pk),
+            condition="",
+        )
+
+        serializer = ProductCreateUpdateSerializer(data=payload)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("category", serializer.errors)
+
+        payload.update(
+            item_type=Product.ItemType.PRODUCT,
+            category=str(service_category.pk),
+            condition="bon_etat",
+        )
+        serializer = ProductCreateUpdateSerializer(data=payload)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("category", serializer.errors)
+
     def test_draft_is_private_but_archived_product_is_public(self):
         draft = self.create_product(Product.Status.DRAFT)
         archived = self.create_product(Product.Status.ARCHIVED)

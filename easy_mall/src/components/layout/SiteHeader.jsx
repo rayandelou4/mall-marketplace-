@@ -35,15 +35,15 @@ function AuthArea({ t, mobile = false }) {
 
   if (isAuthenticated) {
     return (
-      <div className={cx("relative", mobile && "w-full")}>
+      <div className={cx("relative min-w-0", mobile && "w-full max-w-full")}>
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
           aria-haspopup="menu"
-          className={cx("flex items-center gap-2 rounded-full border px-2 py-1.5", t.border, mobile && "w-full justify-between")}
+          className={cx("flex min-w-0 items-center gap-2 rounded-full border px-2 py-1.5", t.border, mobile && "w-full max-w-full justify-between")}
         >
-          <span className="flex items-center gap-2">
+          <span className="flex min-w-0 items-center gap-2">
             {user?.avatar_url ? (
               <img src={user.avatar_url} alt="Photo de profil" className="h-7 w-7 rounded-full object-cover" />
             ) : (
@@ -51,14 +51,24 @@ function AuthArea({ t, mobile = false }) {
                 {user?.username?.charAt(0)?.toUpperCase() || "?"}
               </span>
             )}
-            <span className={cx("text-sm font-medium", t.textPrimary)}>{user?.username}</span>
+            <span className={cx("max-w-40 truncate text-sm font-medium", t.textPrimary)}>{user?.username}</span>
           </span>
           <ChevronDown className={cx("h-4 w-4 transition-transform", t.textMuted, open && "rotate-180")} />
         </button>
 
         {open && (
-          <div className={cx("absolute right-0 top-full z-50 mt-2 min-w-48 rounded-xl border p-1 shadow-lg", t.cardBorder, t.cardBg, mobile && "left-0 right-auto w-full")} role="menu">
-            <div className="flex items-center gap-2 px-2 py-2">
+          <div
+            className={cx(
+              "absolute top-full z-50 mt-2 box-border rounded-xl border p-1 shadow-lg",
+              mobile
+                ? "left-0 w-full max-w-full"
+                : "right-0 w-max min-w-48 max-w-[calc(100vw-2rem)]",
+              t.cardBorder,
+              t.cardBg
+            )}
+            role="menu"
+          >
+            <div className="flex min-w-0 items-center gap-2 px-2 py-2">
               {user?.avatar_url && (
                 <ProfilePhotoViewer
                   src={user.avatar_url}
@@ -73,7 +83,7 @@ function AuthArea({ t, mobile = false }) {
               <Link
                 to={`/profil/${user?.username || ""}`}
                 onClick={() => setOpen(false)}
-                className={cx("flex flex-1 items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-indigo-50", t.textPrimary)}
+                className={cx("flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-indigo-50", t.textPrimary)}
                 role="menuitem"
               >
                 <UserRound className="h-4 w-4" /> Mon profil
@@ -187,7 +197,7 @@ export function SiteHeader({ initialSearch = "" }) {
 
   return (
     <header className={cx("sticky top-0 z-40 border-b backdrop-blur shadow-[0_6px_24px_rgba(24,24,27,0.04)]", t.headerBg, t.border)}>
-      <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 sm:px-6">
+      <div className="mx-auto flex w-full min-w-0 max-w-7xl items-center gap-3 px-4 py-3 sm:gap-4 sm:px-6">
         <Link to="/" className="text-2xl font-semibold text-indigo-600">Mall</Link>
 
         <nav className="ml-4 hidden items-center gap-4 xl:flex">
@@ -198,7 +208,7 @@ export function SiteHeader({ initialSearch = "" }) {
           ))}
         </nav>
 
-        <form onSubmit={submitSearch} className="ml-auto hidden flex-1 max-w-md items-center gap-2 rounded-full border px-4 py-2 md:flex">
+        <form onSubmit={submitSearch} className="ml-auto hidden min-w-0 max-w-md flex-1 items-center gap-2 rounded-full border px-4 py-2 md:flex">
           <Search className={cx("h-4 w-4 shrink-0", t.textMuted)} />
           <input
             type="text"
@@ -209,10 +219,11 @@ export function SiteHeader({ initialSearch = "" }) {
           />
         </form>
 
+        <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
         <Link to="/panier" aria-label="Panier" className={cx("relative rounded-full border p-2 hover:border-indigo-400", t.border)}>
           <ShoppingBag className="h-4 w-4" />
           {totalItems > 0 && (
-            <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-semibold text-white">
+            <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-semibold text-white">
               {totalItems}
             </span>
           )}
@@ -282,11 +293,12 @@ export function SiteHeader({ initialSearch = "" }) {
           {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </button>
 
-        <div className="hidden sm:block"><AuthArea t={t} /></div>
+        <div className="hidden min-w-0 sm:block"><AuthArea t={t} /></div>
 
-        <button className="ml-1 xl:hidden" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Menu">
+        <button className="shrink-0 xl:hidden" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Menu">
           {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </button>
+        </div>
       </div>
 
       {mobileOpen && (
@@ -306,7 +318,7 @@ export function SiteHeader({ initialSearch = "" }) {
                 {link.label}
               </Link>
             ))}
-            <div className="mt-2"><AuthArea t={t} mobile /></div>
+            <div className="mt-2 w-full min-w-0"><AuthArea t={t} mobile /></div>
           </div>
         </div>
       )}

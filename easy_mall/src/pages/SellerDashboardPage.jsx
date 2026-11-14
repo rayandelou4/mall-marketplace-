@@ -503,6 +503,7 @@ export default function SellerDashboardPage() {
                 <div key={item.id} className={cx("flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-4 text-sm", t.cardBorder, t.cardBg)}>
                   <div className="min-w-35 flex-1">
                     <p className={cx("font-medium", t.textPrimary)}>{item.product_title}{item.variant_label ? ` · ${item.variant_label}` : ""} × {item.quantity}</p>
+                    <p className={cx("mt-1 text-xs", t.textMuted)}>Commande : <span className="font-mono">{item.order_number || item.order}</span></p>
                     <p className={cx("mt-1 text-xs", t.textMuted)}>Acheteur : {item.buyer_name}</p>
                     {item.shipping_address && (
                       <p className={cx("mt-1 flex items-start gap-1 text-xs", t.textMuted)}>
@@ -512,15 +513,22 @@ export default function SellerDashboardPage() {
                     )}
                   </div>
                   <span className={cx("text-xs", t.textMuted)}>
+                    {item.sale_method === "delivery" ? "Livraison" : "À retirer en boutique"}
+                    {" · "}
                     {item.order_status === "pending" && item.payment_method === "cash"
                       ? item.sale_method === "delivery" ? "En attente d’expédition" : "En attente de remise"
                       : item.order_status === "shipped"
                         ? "Expédiée · en attente de confirmation de l’acheteur"
                         : item.order_status === "delivered"
                           ? "Réception confirmée par l’acheteur"
-                          : item.order_status}
+                          : ` · ${item.order_status}`}
                   </span>
-                  <span className="font-mono">{formatPrice(item.subtotal, item.currency)}</span>
+                  <div className="min-w-36 text-right text-xs">
+                    <p className={t.textPrimary}>Marchandises : <span className="font-mono">{formatPrice(item.merchandise_amount ?? item.subtotal - Number(item.shipping_cost || 0), item.currency)}</span></p>
+                    {Number(item.shipping_cost) > 0 && (
+                      <p className={cx("mt-1", t.textMuted)}>Livraison : <span className="font-mono">{formatPrice(item.shipping_cost, item.currency)}</span></p>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={() => handleContactBuyer(item)}

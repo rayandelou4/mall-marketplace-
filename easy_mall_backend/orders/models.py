@@ -189,4 +189,8 @@ class OrderItem(models.Model):
 
     @property
     def subtotal(self):
-        return (self.unit_price * self.quantity) + self.shipping_cost - self.loyalty_discount
+        return self.merchandise_amount + self.shipping_cost
+
+    @property
+    def merchandise_amount(self):
+        return (self.unit_price * self.quantity) - self.loyalty_discount

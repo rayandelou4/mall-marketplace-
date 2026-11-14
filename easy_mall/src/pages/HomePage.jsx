@@ -47,6 +47,46 @@ const STEPS = [
   { n: "03", title: "Encaissez à la remise", text: "Remettez le produit ou réalisez la prestation, puis recevez le paiement en espèces en main propre." },
 ];
 
+const HERO_FALLBACKS = [
+  {
+    src: "https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=2000&q=85",
+    alt: "Personne portant une tenue proposée sur une marketplace",
+    type: "Mode et accessoires",
+  },
+  {
+    src: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=2000&q=85",
+    alt: "Chaussure proposée à la vente",
+    type: "Articles du quotidien",
+  },
+  {
+    src: "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=2000&q=85",
+    alt: "Téléphone disponible parmi les annonces",
+    type: "Électronique",
+  },
+  {
+    src: "https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&w=2000&q=85",
+    alt: "Professionnel dans son espace de travail",
+    type: "Services près de chez vous",
+  },
+];
+
+function buildHeroSlides(products, services) {
+  const listings = [
+    ...products.map((product) => ({
+      src: product.primary_image,
+      alt: product.title,
+      type: product.category_name || "Produits",
+    })),
+    ...services.map((service) => ({
+      src: service.primary_image,
+      alt: service.title,
+      type: service.category_name || "Services",
+    })),
+  ].filter((slide) => slide.src);
+
+  return [...listings.slice(0, 4), ...HERO_FALLBACKS].slice(0, 5);
+}
+
 function ProductRail({ products, t, onToggleFavorite, showViews = false }) {
   const railRef = useRef(null);
 
@@ -105,6 +145,8 @@ export default function MallHomePage() {
   const popularSectionsRef = useRef(null);
   const [popularLoading, setPopularLoading] = useState(false);
   const [popularLoaded, setPopularLoaded] = useState(false);
+  const [heroIndex, setHeroIndex] = useState(0);
+  const [heroPaused, setHeroPaused] = useState(false);
   const [data, setData] = useState({ loading: true, error: null, categories: [], recentProducts: [], recentServices: [], popularProducts: [], popularServices: [] });
 
   useEffect(() => {
@@ -137,6 +179,19 @@ export default function MallHomePage() {
     load();
     return () => { cancelled = true; };
   }, []);
+
+  const heroSlides = buildHeroSlides(data.recentProducts, data.recentServices);
+  const activeHero = heroSlides[heroIndex % heroSlides.length];
+
+  useEffect(() => {
+    if (heroPaused || heroSlides.length < 2 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      setHeroIndex((current) => (current + 1) % heroSlides.length);
+    }, 5500);
+    return () => window.clearInterval(intervalId);
+  }, [heroPaused, heroSlides.length]);
 
   useEffect(() => {
     const section = popularSectionsRef.current;
@@ -208,42 +263,76 @@ export default function MallHomePage() {
     <div className={cx("min-h-screen font-sans transition-colors duration-300", t.pageBg, t.textPrimary)}>
       <SiteHeader />
 
-      <section className="mx-auto max-w-7xl px-4 pt-12 sm:px-6 sm:pt-16">
-        <div className="mx-auto max-w-2xl text-center">
-          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-600">
-            Marketplace nouvelle génération
+      <section
+        className="relative isolate min-h-[min(68vh,38rem)] overflow-hidden bg-zinc-900"
+        aria-label="Produits et services sur Mall"
+        onMouseEnter={() => setHeroPaused(true)}
+        onMouseLeave={() => setHeroPaused(false)}
+        onFocusCapture={() => setHeroPaused(true)}
+        onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setHeroPaused(false);
+        }}
+      >
+        <img
+          key={activeHero.src}
+          src={activeHero.src}
+          alt={activeHero.alt}
+          className="hero-image-reveal absolute inset-0 h-full w-full object-cover"
+          onError={(event) => {
+            event.currentTarget.onerror = null;
+            event.currentTarget.src = HERO_FALLBACKS[0].src;
+          }}
+        />
+        <div className="absolute inset-0 bg-zinc-950/50" aria-hidden="true" />
+        <div className="relative mx-auto flex min-h-[min(68vh,38rem)] max-w-7xl items-center px-4 py-14 sm:px-6 sm:py-16">
+          <div className="max-w-3xl pb-12 text-white">
+            <span className="inline-flex items-center rounded-full border border-white/40 bg-black/20 px-3 py-1 text-xs font-semibold text-white">
+              {activeHero.type} · Marketplace en Afrique
+            </span>
+            <h1 className="mt-5 max-w-2xl text-4xl font-semibold leading-[1.1] sm:text-5xl lg:text-6xl">
+              Vendez ce qui dort. Trouvez ce qu'il vous faut.
+            </h1>
+            <p className="mt-5 max-w-xl text-base text-white/90 sm:text-lg">
+              Découvrez des produits près de chez vous ou trouvez un professionnel pour votre prochain besoin.
+            </p>
+            <div className="mt-7 flex flex-wrap gap-3">
+              <Link to={isAuthenticated ? "/vendeur" : "/auth?mode=register"} className="rounded-lg bg-white px-5 py-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-100">
+                Commencer à vendre
+              </Link>
+              <Link to="/catalogue?item_type=product" className="rounded-lg border border-white/70 bg-black/15 px-5 py-3 text-sm font-semibold text-white hover:bg-white/15">
+                Découvrir les produits
+              </Link>
+              <Link to="/catalogue?item_type=service" className="rounded-lg border border-white/70 bg-black/15 px-5 py-3 text-sm font-semibold text-white hover:bg-white/15">
+                Trouver un service
+              </Link>
+            </div>
+            <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-xs font-medium text-white/90 sm:text-sm">
+              <span className="inline-flex items-center gap-2"><ShieldCheck className="h-4 w-4" /> Paiement à la remise</span>
+              <span className="inline-flex items-center gap-2"><Users className="h-4 w-4" /> Vendeurs vérifiés</span>
+              <span className="inline-flex items-center gap-2"><Truck className="h-4 w-4" /> Livraison suivie</span>
+            </div>
+          </div>
+        </div>
+        <div className="absolute bottom-4 right-4 flex items-center gap-2 sm:bottom-6 sm:right-6">
+          <button
+            type="button"
+            onClick={() => setHeroIndex((current) => (current - 1 + heroSlides.length) % heroSlides.length)}
+            aria-label="Image précédente"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/60 bg-black/30 text-white hover:bg-black/50"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <span className="min-w-12 text-center text-xs font-semibold text-white" aria-live="polite">
+            {heroIndex + 1} / {heroSlides.length}
           </span>
-          <h1 className="mt-4 text-4xl font-semibold leading-[1.1] sm:text-5xl">Vendez ce qui dort. Trouvez ce qu'il vous faut.</h1>
-          <p className={cx("mt-5 text-base", t.textMuted)}>
-            Mall connecte des acheteurs et des vendeurs à travers l'Afrique — vêtements, électronique,
-            maison et plus, de Kinshasa à Dakar.
-          </p>
-          <div className="mt-6 flex flex-wrap justify-center gap-3">
-            <Link to={isAuthenticated ? "/vendeur" : "/auth?mode=register"} className="rounded-full bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700">
-              Commencer à vendre
-            </Link>
-            <Link to="/catalogue?item_type=product" className={cx("rounded-full border px-6 py-3 text-sm font-semibold", t.border)}>
-              Découvrir les produits
-            </Link>
-            <Link to="/catalogue?item_type=service" className={cx("rounded-full border px-6 py-3 text-sm font-semibold", t.border)}>
-              Trouver un service
-            </Link>
-          </div>
-          <div className="mt-8 grid grid-cols-1 gap-4 text-left sm:grid-cols-3">
-            {[
-              { icon: ShieldCheck, label: "Paiement à la remise", text: "Vous payez en main propre" },
-              { icon: Users, label: "Vendeurs vérifiés", text: "E-mail confirmé" },
-              { icon: Truck, label: "Livraison suivie", text: "Colis suivi de bout en bout" },
-            ].map((item) => (
-              <div key={item.label} className="flex items-start gap-2">
-                <item.icon className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
-                <div>
-                  <p className={cx("text-sm font-semibold", t.textPrimary)}>{item.label}</p>
-                  <p className={cx("text-xs", t.textMuted)}>{item.text}</p>
-                </div>
-              </div>
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={() => setHeroIndex((current) => (current + 1) % heroSlides.length)}
+            aria-label="Image suivante"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/60 bg-black/30 text-white hover:bg-black/50"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </button>
         </div>
       </section>
 
@@ -258,7 +347,7 @@ export default function MallHomePage() {
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
             {categories.slice(0, 8).map((category) => (
-              <Link key={category.id} to={`/catalogue?category=${category.id}&item_type=${category.slug === "services" ? "service" : "product"}`} className={cx("flex flex-col items-center gap-2 rounded-2xl border p-4 text-center transition hover:border-indigo-400 hover:shadow-sm", t.cardBorder, t.cardBg)}>
+              <Link key={category.id} to={`/catalogue?category=${category.id}&item_type=${category.category_type}`} className={cx("flex flex-col items-center gap-2 rounded-2xl border p-4 text-center transition hover:border-indigo-400 hover:shadow-sm", t.cardBorder, t.cardBg)}>
                 {category.icon_url ? <img src={category.icon_url} alt="" className="h-5 w-5" /> : <Tag className="h-5 w-5 text-indigo-600" />}
                 <span className={cx("text-xs font-medium", t.textPrimary)}>{category.name}</span>
               </Link>

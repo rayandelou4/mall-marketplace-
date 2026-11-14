@@ -19,9 +19,19 @@ from django.utils.translation import gettext_lazy as _
 class Category(models.Model):
     """Catégorie de produits, avec sous-catégories via `parent`."""
 
+    class CategoryType(models.TextChoices):
+        PRODUCT = "product", _("Produits")
+        SERVICE = "service", _("Services")
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(_("nom"), max_length=100)
     slug = models.SlugField(max_length=120, unique=True, blank=True)
+    category_type = models.CharField(
+        max_length=10,
+        choices=CategoryType.choices,
+        default=CategoryType.PRODUCT,
+        db_index=True,
+    )
     parent = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -44,6 +54,14 @@ class Category(models.Model):
         if not self.slug:
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.parent_id and self.parent.category_type != self.category_type:
+            raise ValidationError(
+                {"parent": "Une sous-catégorie doit avoir le même type que sa catégorie parente."}
+            )
 
     @property
     def is_subcategory(self):

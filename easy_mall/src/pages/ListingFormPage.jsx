@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ImagePlus, Sparkles, Trash2 } from "lucide-react";
 import { SiteHeader } from "../components/layout/SiteHeader";
@@ -22,6 +22,10 @@ const CONDITIONS = [
   { value: "satisfaisant", label: "Satisfaisant" },
   { value: "a_reconditionner", label: "À reconditionner" },
 ];
+
+function flattenCategories(items) {
+  return items.flatMap((category) => [category, ...flattenCategories(category.children || [])]);
+}
 
 const EMPTY_FORM = {
   item_type: "product", title: "", description: "", category: "", price: "", currency: "USD", price_unit: "fixed", condition: "bon_etat",
@@ -191,15 +195,15 @@ export default function ListingFormPage() {
     "w-full rounded-xl border px-4 py-2.5 text-sm outline-none focus:border-indigo-500",
     t.inputBg, t.border, t.textPrimary
   );
-  const listingCategories = form.item_type === "service"
-    ? categories.filter((category) => category.slug === "services")
-    : categories;
+  const allCategories = useMemo(() => flattenCategories(categories), [categories]);
+  const listingCategories = allCategories.filter(
+    (category) => category.category_type === form.item_type
+  );
 
   useEffect(() => {
-    if (form.item_type !== "service") return;
-    const servicesCategory = categories.find((category) => category.slug === "services");
-    if (servicesCategory && form.category !== servicesCategory.id) {
-      setForm((current) => ({ ...current, category: servicesCategory.id }));
+    const selectedCategory = allCategories.find((category) => category.id === form.category);
+    if (selectedCategory && selectedCategory.category_type !== form.item_type) {
+      setForm((current) => ({ ...current, category: "" }));
     }
   }, [categories, form.category, form.item_type]);
 
@@ -322,14 +326,15 @@ export default function ListingFormPage() {
                     type="button"
                     aria-pressed={form.item_type === value}
                     onClick={() => {
-                      update("item_type")(value);
-                      if (value === "product" && !form.condition) update("condition")("bon_etat");
-                      if (value === "product" && categories.some((category) => category.id === form.category && category.slug === "services")) update("category")("");
-                      if (value === "service") {
-                        setForm((current) => ({ ...current, variants: [] }));
-                        const servicesCategory = categories.find((category) => category.slug === "services");
-                        if (servicesCategory) update("category")(servicesCategory.id);
-                      }
+                      setForm((current) => ({
+                        ...current,
+                        item_type: value,
+                        category: allCategories.find((category) => category.id === current.category)?.category_type === value
+                          ? current.category
+                          : "",
+                        condition: value === "product" && !current.condition ? "bon_etat" : current.condition,
+                        variants: value === "service" ? [] : current.variants,
+                      }));
                     }}
                     className={cx("rounded-lg px-3 py-2 text-sm font-medium", form.item_type === value ? "bg-indigo-600 text-white" : t.textMuted)}
                   >
